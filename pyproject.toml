@@ -29,6 +29,7 @@ Homepage = "https://github.com/kiliansen/pyWorkflowy"
 Issues = "https://github.com/kiliansen/pyWorkflowy/issues"
 
 
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -110,6 +111,7 @@ upload_to_vcs_release = true
 
 [tool.semantic_release.changelog]
 exclude_commit_patterns = ["^chore\\(release\\):"]
+
 
 [dependency-groups]
 dev = [
