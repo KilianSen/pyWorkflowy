@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import time
 
 import pytest
 
-from pyworkflowy import Pool, Task, TaskRunner, TaskStatus, task
+from pyworkflowy import Pool, TaskRunner, TaskStatus, task
 from pyworkflowy._backends import build_pool_executor
 
 

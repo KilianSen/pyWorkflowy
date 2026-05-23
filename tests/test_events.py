@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import threading
-import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
 import pytest
 
-from pyworkflowy import TaskRunner, TaskStatus, task
+from pyworkflowy import TaskRunner, task
 from pyworkflowy.schedule import Scheduler
 
 

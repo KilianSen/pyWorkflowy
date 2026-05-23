@@ -167,7 +167,8 @@ class ThreadPool(PoolExecutor):
         except TimeoutError as exc:
             cancel_event.set()
             raise TaskTimeoutError(
-                f"Task {task_name!r} exceeded its timeout of {timeout}s on pool {self.pool.name!r} (thread)"
+                f"Task {task_name!r} exceeded its timeout of {timeout}s on "
+                f"pool {self.pool.name!r} (thread)"
             ) from exc
 
 
@@ -201,7 +202,8 @@ class ProcessPool(PoolExecutor):
         except TimeoutError as exc:
             future.cancel()
             raise TaskTimeoutError(
-                f"Task {task_name!r} exceeded its timeout of {timeout}s on pool {self.pool.name!r} (process)"
+                f"Task {task_name!r} exceeded its timeout of {timeout}s on "
+                f"pool {self.pool.name!r} (process)"
             ) from exc
 
 

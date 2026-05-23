@@ -45,9 +45,8 @@ def test_async_with_thread_pool_rejected() -> None:
 
     # The kind/async mismatch is detected at submit time, not at decoration time:
     # decoration doesn't know what kind the pool has.
-    with TaskRunner() as runner:
-        with pytest.raises(ValueError, match="async"):
-            runner.submit(af)
+    with TaskRunner() as runner, pytest.raises(ValueError, match="async"):
+        runner.submit(af)
 
 
 def test_unknown_pool_rejected_at_submit() -> None:
@@ -55,9 +54,8 @@ def test_unknown_pool_rejected_at_submit() -> None:
     def f() -> None:
         return None
 
-    with TaskRunner() as runner:
-        with pytest.raises(ValueError, match="no pool by that name"):
-            runner.submit(f)
+    with TaskRunner() as runner, pytest.raises(ValueError, match="no pool by that name"):
+        runner.submit(f)
 
 
 def test_retries_negative() -> None:

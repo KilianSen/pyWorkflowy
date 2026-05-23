@@ -3,8 +3,6 @@ from __future__ import annotations
 import asyncio
 import time
 
-import pytest
-
 from pyworkflowy import TaskRunner, TaskStatus, task
 
 

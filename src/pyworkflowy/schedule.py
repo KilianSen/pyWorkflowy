@@ -29,7 +29,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from pyworkflowy._core import Task, TaskHandle
-from pyworkflowy._events import EventHandler, EventSource
+from pyworkflowy._events import EventSource
 from pyworkflowy._runner import TaskRunner, get_current_runner
 
 __all__ = [

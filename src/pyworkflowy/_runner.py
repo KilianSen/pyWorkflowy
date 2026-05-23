@@ -22,7 +22,7 @@ import threading
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from typing import Any, Literal
 
@@ -138,8 +138,8 @@ class TaskRunner:
         "_pool_running",
         "_pool_running_unprivileged",
         "_pools",
-        "_progress_throttle_seconds",
         "_progress_throttle_delta",
+        "_progress_throttle_seconds",
         "_resumed_results",
         "_shutdown",
         "_submission_order",
@@ -788,11 +788,9 @@ class TaskRunner:
             return
         if aiotask.done():
             return
-        try:
+        # If the loop is closed, fall back silently to the flag-based cancel.
+        with suppress(RuntimeError):
             loop.call_soon_threadsafe(aiotask.cancel)
-        except RuntimeError:
-            # Loop is closed — flag-based cancel is the best we can do.
-            pass
 
     # ---------- shutdown ----------
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pyworkflowy._backends import Pool, PoolKind
 from pyworkflowy._classbased import TaskBase
-from pyworkflowy._events import EventHandler, EventSource
 from pyworkflowy._core import (
     Backoff,
     DepFailurePolicy,
@@ -16,6 +15,7 @@ from pyworkflowy._core import (
     current_task,
     task,
 )
+from pyworkflowy._events import EventHandler, EventSource
 from pyworkflowy._persistence import Checkpointer, JSONCheckpointer, PickleCheckpointer
 from pyworkflowy._runner import TaskRunner, get_current_runner
 from pyworkflowy.exceptions import (

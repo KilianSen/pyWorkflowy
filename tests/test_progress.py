@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 
 from pyworkflowy import TaskRunner, TaskStatus, current_task, task
 
