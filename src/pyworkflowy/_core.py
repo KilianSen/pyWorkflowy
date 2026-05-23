@@ -493,9 +493,7 @@ def _build_task(
             f"on_dep_failure must be 'skip', 'fail', or 'run-anyway'; got {on_dep_failure!r}"
         )
     if not isinstance(dedup_by, tuple) or not all(isinstance(k, str) for k in dedup_by):
-        raise TypeError(
-            f"dedup_by must be a tuple of kwarg-name strings; got {dedup_by!r}"
-        )
+        raise TypeError(f"dedup_by must be a tuple of kwarg-name strings; got {dedup_by!r}")
     triggers_t: tuple[str, ...] = tuple(triggers)
     if not all(isinstance(t, str) for t in triggers_t):
         raise TypeError(f"triggers must be strings; got {triggers!r}")

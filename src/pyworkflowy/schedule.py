@@ -390,8 +390,7 @@ class Scheduler:
         with self._lock:
             if any(j.is_event_driven and not j.cancelled for j in self._jobs):
                 raise RuntimeError(
-                    "Cannot rebind event source while event-driven jobs exist. "
-                    "Cancel them first."
+                    "Cannot rebind event source while event-driven jobs exist. Cancel them first."
                 )
             self._event_source = source
 

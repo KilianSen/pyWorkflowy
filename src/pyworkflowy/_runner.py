@@ -610,9 +610,7 @@ class TaskRunner:
                         result = TaskResult(
                             name=task_obj.name,
                             status=TaskStatus.CANCELLED,
-                            error=TaskCancelledError(
-                                f"Task {task_obj.name!r} was cancelled"
-                            ),
+                            error=TaskCancelledError(f"Task {task_obj.name!r} was cancelled"),
                             attempts=attempts,
                             started_at=started_at,
                             finished_at=_wallclock(),
