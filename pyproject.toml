@@ -1,6 +1,6 @@
 [project]
 name = "pyworkflowy"
-version = "0.1.0"
+version = "0.5.0"
 description = "A full workflow engine for async/parallelized Python tasks."
 readme = "README.md"
 license = { file = "LICENSE" }

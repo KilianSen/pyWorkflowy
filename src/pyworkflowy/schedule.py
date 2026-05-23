@@ -1,6 +1,6 @@
-"""Cron-like scheduling for pyWorkflowy tasks.
+"""Cron-like scheduling and reactive event-triggered tasks for pyWorkflowy.
 
-Three scheduling forms:
+Four scheduling forms — all produced via :class:`JobBuilder.do`:
 
 * :meth:`Scheduler.every(seconds).do(task, ...)` — fixed-interval, anchored to
   ``start()`` time. The first fire is one interval after start.
@@ -8,10 +8,14 @@ Three scheduling forms:
   ``*``, ``*/N``, ranges (``a-b``), and lists (``a,b,c``). No seconds field, no
   ``@hourly`` aliases — keep it minimal.
 * :meth:`Scheduler.at(datetime).do(task, ...)` — one-shot at an absolute time.
+* :meth:`Scheduler.on(event_name).do(task, payload_map=...)` — fire whenever
+  the bound :class:`~pyworkflowy._events.EventSource` publishes the named
+  event. Requires :meth:`Scheduler.bind_event_source` first.
 
-Missed fires while the scheduler was stopped are *not* backfilled. Each call
-to ``do(task, *args, **kwargs)`` registers a new job; the same task can be
-scheduled multiple times with different args.
+Missed time-based fires while the scheduler was stopped are *not* backfilled.
+Event-driven jobs only fire while the scheduler is running *and* an event
+source is bound. Each call to ``do(task, *args, **kwargs)`` registers a new
+job; the same task can be scheduled multiple times with different args.
 """
 
 from __future__ import annotations
@@ -19,12 +23,13 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
 from pyworkflowy._core import Task, TaskHandle
+from pyworkflowy._events import EventHandler, EventSource
 from pyworkflowy._runner import TaskRunner, get_current_runner
 
 __all__ = [
@@ -182,7 +187,14 @@ def parse_cron(expression: str) -> CronExpression:
 
 @dataclass(slots=True)
 class ScheduledJob:
-    """One registered scheduling rule. Created internally by :class:`JobBuilder`."""
+    """One registered scheduling rule. Created internally by :class:`JobBuilder`.
+
+    Holds enough state for cron/interval/one-shot/event triggers; only one
+    of (``interval``, ``cron``, ``one_shot``, ``event_name``) is meaningful
+    per job. Event-driven jobs hold an ``_unsubscribe`` callable returned by
+    the bound :class:`EventSource` so :meth:`Scheduler.cancel` and
+    :meth:`Scheduler.stop` can tear the subscription down cleanly.
+    """
 
     task: Task[Any]
     args: tuple[Any, ...]
@@ -191,12 +203,24 @@ class ScheduledJob:
     interval: float | None = None  # seconds; for every()
     cron: CronExpression | None = None
     one_shot: bool = False
+    event_name: str | None = None
+    payload_map: tuple[tuple[str, str], ...] | None = None
     last_handle: TaskHandle[Any] | None = None
     cancelled: bool = field(default=False)
+    _unsubscribe: Callable[[], None] | None = field(default=None, repr=False)
+
+    @property
+    def is_event_driven(self) -> bool:
+        """True iff this job fires from an :class:`EventSource`, not on a clock."""
+        return self.event_name is not None
 
     def schedule_next(self, now: float) -> None:
         if self.one_shot:
             self.cancelled = True
+            return
+        if self.is_event_driven:
+            # Event-driven jobs never reschedule themselves; they fire from the
+            # subscriber callback in :meth:`Scheduler._register_event_job`.
             return
         if self.interval is not None:
             # Advance from the prior fire time, not from now, so jitter doesn't
@@ -212,13 +236,13 @@ class ScheduledJob:
 
 
 class JobBuilder:
-    """Returned by :meth:`Scheduler.every`/``.cron``/``.at`` to receive ``.do(task)``.
+    """Returned by :meth:`Scheduler.every`/``.cron``/``.at``/``.on`` to receive ``.do(task)``.
 
     Splitting builder from registration lets the trigger keyword (``every``,
-    ``cron``, ``at``) read naturally without forcing positional args.
+    ``cron``, ``at``, ``on``) read naturally without forcing positional args.
     """
 
-    __slots__ = ("_cron", "_interval", "_one_shot", "_scheduler", "_when")
+    __slots__ = ("_cron", "_event_name", "_interval", "_one_shot", "_scheduler", "_when")
 
     def __init__(
         self,
@@ -227,18 +251,43 @@ class JobBuilder:
         interval: float | None = None,
         cron: CronExpression | None = None,
         when: float | None = None,
+        event_name: str | None = None,
     ) -> None:
         self._scheduler = scheduler
         self._interval = interval
         self._cron = cron
         self._when = when
         self._one_shot = when is not None
+        self._event_name = event_name
 
-    def do(self, task: Task[Any], *args: Any, **kwargs: Any) -> ScheduledJob:
+    def do(
+        self,
+        task: Task[Any],
+        *args: Any,
+        payload_map: Mapping[str, str] | None = None,
+        **kwargs: Any,
+    ) -> ScheduledJob:
         if not isinstance(task, Task):
             raise TypeError(
                 f"Scheduler.do() expects a Task; got {type(task).__name__}. Wrap your "
                 "callable with @task first."
+            )
+        if self._event_name is not None:
+            pm = tuple(sorted(payload_map.items())) if payload_map else ()
+            job = ScheduledJob(
+                task=task,
+                args=args,
+                kwargs=kwargs,
+                next_fire=float("inf"),
+                event_name=self._event_name,
+                payload_map=pm,
+            )
+            self._scheduler._register_event_job(job)
+            return job
+        if payload_map is not None:
+            raise ValueError(
+                "payload_map= is only valid for event-driven jobs created via "
+                "Scheduler.on(event_name).do(...)."
             )
         now = time.time()
         if self._when is not None:
@@ -277,6 +326,7 @@ class Scheduler:
 
     __slots__ = (
         "_clock",
+        "_event_source",
         "_jobs",
         "_lock",
         "_runner",
@@ -292,6 +342,7 @@ class Scheduler:
         runner: TaskRunner | None = None,
         tick_seconds: float = 0.5,
         clock: Callable[[], float] | None = None,
+        event_source: EventSource | None = None,
     ) -> None:
         if tick_seconds <= 0:
             raise ValueError(f"tick_seconds must be > 0, got {tick_seconds}")
@@ -303,6 +354,7 @@ class Scheduler:
         self._thread: threading.Thread | None = None
         self._started = False
         self._clock = clock or time.time
+        self._event_source: EventSource | None = event_source
 
     # ---------- registration API ----------
 
@@ -319,6 +371,45 @@ class Scheduler:
         ts = when.timestamp() if isinstance(when, datetime) else float(when)
         return JobBuilder(self, when=ts)
 
+    def on(self, event_name: str) -> JobBuilder:
+        """Register a task to fire when ``event_name`` is published on the bound source.
+
+        Requires :meth:`bind_event_source` first (or ``event_source=`` to the
+        constructor). The follow-up ``.do(task, payload_map={...})`` accepts a
+        mapping from event-payload keys to task kwarg names.
+        """
+        return JobBuilder(self, event_name=event_name)
+
+    def bind_event_source(self, source: EventSource) -> None:
+        """Plug an :class:`EventSource` into the scheduler.
+
+        Must be called before :meth:`on` is used for any job. Rebinding when
+        event-driven jobs already exist is rejected — tear them down first
+        with :meth:`cancel`.
+        """
+        with self._lock:
+            if any(j.is_event_driven and not j.cancelled for j in self._jobs):
+                raise RuntimeError(
+                    "Cannot rebind event source while event-driven jobs exist. "
+                    "Cancel them first."
+                )
+            self._event_source = source
+
+    def bind_tasks(self, *tasks: Task[Any]) -> list[ScheduledJob]:
+        """Auto-register any task whose ``triggers`` metadata is non-empty.
+
+        Reads each task's ``triggers`` and ``payload_map`` and wires it via
+        :meth:`on`. Returns the list of jobs that were created. Tasks without
+        triggers are silently ignored so this can be called on a heterogeneous
+        list.
+        """
+        registered: list[ScheduledJob] = []
+        for t in tasks:
+            for event_name in t.triggers:
+                payload_map = dict(t.payload_map) if t.payload_map else None
+                registered.append(self.on(event_name).do(t, payload_map=payload_map))
+        return registered
+
     def jobs(self) -> list[ScheduledJob]:
         with self._lock:
             return list(self._jobs)
@@ -328,9 +419,60 @@ class Scheduler:
             if job not in self._jobs:
                 return False
             job.cancelled = True
-            return True
+        # Unsubscribe outside the lock — the source may take its own lock.
+        unsub = job._unsubscribe
+        if unsub is not None:
+            try:
+                unsub()
+            except Exception:
+                import logging
+
+                logging.getLogger("pyworkflowy").exception(
+                    "pyworkflowy: event unsubscribe raised; continuing"
+                )
+            job._unsubscribe = None
+        return True
 
     def _add_job(self, job: ScheduledJob) -> None:
+        with self._lock:
+            self._jobs.append(job)
+
+    def _register_event_job(self, job: ScheduledJob) -> None:
+        """Subscribe ``job`` to the bound event source and append it to the registry."""
+        if self._event_source is None:
+            raise RuntimeError(
+                f"Scheduler.on({job.event_name!r}) requires an event source. "
+                "Call bind_event_source(source) before registering event jobs."
+            )
+        event_name = job.event_name
+        assert event_name is not None
+        payload_map = job.payload_map or ()
+
+        def handler(payload: Mapping[str, Any]) -> None:
+            if job.cancelled:
+                return
+            mapped = dict(job.kwargs)
+            for event_key, kwarg_name in payload_map:
+                if event_key in payload:
+                    mapped[kwarg_name] = payload[event_key]
+            runner = self._runner or get_current_runner()
+            if runner is None:
+                # No active runner — drop the event silently (mirrors how the
+                # reference queue handles publish-before-startup).
+                return
+            try:
+                handle = runner.submit(job.task, *job.args, source="event", **mapped)
+            except Exception:
+                import logging
+
+                logging.getLogger("pyworkflowy").exception(
+                    "pyworkflowy: event-triggered submit failed; dropping event"
+                )
+                return
+            job.last_handle = handle
+
+        unsub = self._event_source.subscribe(event_name, handler)
+        job._unsubscribe = unsub
         with self._lock:
             self._jobs.append(job)
 
@@ -355,16 +497,32 @@ class Scheduler:
     def stop(self, *, wait: bool = True, timeout: float | None = None) -> None:
         with self._lock:
             self._started = False
+            jobs = list(self._jobs)
+        # Unsubscribe all event-driven jobs so a stopped scheduler doesn't keep
+        # processing events. Time-based jobs need no teardown beyond the loop.
+        for j in jobs:
+            if j._unsubscribe is not None:
+                try:
+                    j._unsubscribe()
+                except Exception:
+                    import logging
+
+                    logging.getLogger("pyworkflowy").exception(
+                        "pyworkflowy: event unsubscribe raised on stop; continuing"
+                    )
+                j._unsubscribe = None
         self._stop_event.set()
         if wait and self._thread is not None:
             self._thread.join(timeout=timeout)
             self._thread = None
 
     def tick(self) -> list[TaskHandle[Any]]:
-        """Manually fire all due jobs once. Returns the handles created.
+        """Manually fire all due time-based jobs once. Returns the handles created.
 
-        Useful for tests that drive the scheduler synchronously by advancing
-        a fake clock and calling ``tick()`` instead of running the loop.
+        Event-driven jobs fire from their subscriber callback, not on the
+        tick — they are skipped here. Useful for tests that drive the
+        scheduler synchronously by advancing a fake clock and calling
+        ``tick()`` instead of running the loop.
         """
         now = self._clock()
         runner = self._runner or get_current_runner()
@@ -375,14 +533,36 @@ class Scheduler:
             )
         fired: list[TaskHandle[Any]] = []
         with self._lock:
-            jobs = [j for j in self._jobs if not j.cancelled and j.next_fire <= now]
+            jobs = [
+                j
+                for j in self._jobs
+                if not j.cancelled and not j.is_event_driven and j.next_fire <= now
+            ]
         for job in jobs:
-            handle = runner.submit(job.task, *job.args, **job.kwargs)
+            # Distinguish cron-fired jobs from manual submits via source="cron".
+            source = "cron" if job.cron is not None else "manual"
+            handle = runner.submit(job.task, *job.args, source=source, **job.kwargs)
             job.last_handle = handle
             job.schedule_next(now)
             fired.append(handle)
         with self._lock:
-            self._jobs = [j for j in self._jobs if not j.cancelled]
+            # Drop cancelled jobs; unsubscribe any with a live subscription.
+            keep: list[ScheduledJob] = []
+            for j in self._jobs:
+                if j.cancelled:
+                    if j._unsubscribe is not None:
+                        try:
+                            j._unsubscribe()
+                        except Exception:
+                            import logging
+
+                            logging.getLogger("pyworkflowy").exception(
+                                "pyworkflowy: event unsubscribe raised; continuing"
+                            )
+                        j._unsubscribe = None
+                    continue
+                keep.append(j)
+            self._jobs = keep
         return fired
 
     def _run_loop(self) -> None:

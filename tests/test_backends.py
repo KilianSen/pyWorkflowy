@@ -7,7 +7,7 @@ from tests._helpers import add, boom, slow_square, square  # type: ignore[import
 
 
 def test_thread_backend_runs() -> None:
-    @task(backend="thread")
+    @task(pool="thread")
     def f(x: int) -> int:
         return x * 2
 
@@ -20,7 +20,7 @@ def test_thread_backend_runs() -> None:
 def test_thread_backend_current_task_set() -> None:
     seen: list[str | None] = []
 
-    @task(backend="thread")
+    @task(pool="thread")
     def f() -> None:
         ctx = current_task()
         seen.append(ctx.name if ctx is not None else None)
@@ -35,7 +35,7 @@ def test_thread_backend_current_task_set() -> None:
 
 
 def test_process_backend_runs() -> None:
-    sq = task(backend="process")(square)
+    sq = task(pool="process")(square)
 
     with TaskRunner() as runner:
         h = runner.submit(sq, 6)
@@ -45,7 +45,7 @@ def test_process_backend_runs() -> None:
 
 
 def test_process_backend_propagates_error() -> None:
-    bad = task(backend="process", retries=0)(boom)
+    bad = task(pool="process", retries=0)(boom)
 
     with TaskRunner(on_task_error="continue") as runner:
         h = runner.submit(bad)
@@ -57,7 +57,7 @@ def test_process_backend_propagates_error() -> None:
 
 
 def test_process_backend_multiple_args() -> None:
-    a = task(backend="process")(add)
+    a = task(pool="process")(add)
     with TaskRunner() as runner:
         h = runner.submit(a, 10, 11)
         runner.run()
@@ -66,7 +66,7 @@ def test_process_backend_multiple_args() -> None:
 
 def test_thread_backend_concurrent() -> None:
     """Concurrent thread tasks all run."""
-    f = task(backend="thread")(slow_square)
+    f = task(pool="thread")(slow_square)
 
     with TaskRunner(max_workers=4) as runner:
         handles = [runner.submit(f, x, 0.05) for x in range(4)]
@@ -89,7 +89,7 @@ async def test_async_backend_runs() -> None:
 
 
 async def test_sync_function_on_asyncio_backend() -> None:
-    @task(backend="asyncio")
+    @task(pool="default")
     def f(x: int) -> int:
         return x + 5
 

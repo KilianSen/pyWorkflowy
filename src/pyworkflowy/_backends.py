@@ -1,10 +1,12 @@
-"""Execution backends: asyncio, thread pool, process pool.
+"""Execution pools: named pools backed by asyncio, threads, or processes.
 
-Each backend implements :meth:`Backend.execute` which takes a task body and
-returns its value, honoring the runner-level concerns the caller has already
-arranged (cancellation flag, contextvars). Retries and timeouts are layered
-*on top* of these backends by :mod:`pyworkflowy._runner` — backends only run a
-single attempt.
+Each :class:`Pool` declares a ``kind`` (asyncio / thread / process), a
+``max_workers`` size, and an optional reservation rule. Tasks declare which
+pool they want with ``@task(pool="<name>")``; the runner maps the pool name to
+an executor (or to inline asyncio execution for the ``asyncio`` kind).
+
+Retries and timeouts are layered *on top* of these pools by
+:mod:`pyworkflowy._runner` — pools only run a single attempt.
 """
 
 from __future__ import annotations
@@ -13,8 +15,9 @@ import asyncio
 import threading
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from dataclasses import dataclass, field
 from inspect import iscoroutinefunction
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pyworkflowy.exceptions import TaskCancelledError, TaskTimeoutError
 
@@ -22,27 +25,99 @@ if TYPE_CHECKING:
     from pyworkflowy._core import TaskContext
 
 __all__ = [
-    "BackendExecutor",
-    "ProcessBackend",
-    "ThreadBackend",
+    "Pool",
+    "PoolExecutor",
+    "PoolKind",
+    "ProcessPool",
+    "ThreadPool",
     "asyncio_execute",
-    "build_backend",
+    "build_pool_executor",
 ]
 
 
-# ---------- thread / process backend ----------
+PoolKind = Literal["asyncio", "thread", "process"]
 
 
-class BackendExecutor:
-    """Protocol-shaped base for the thread/process backends.
+# ---------- pool config ----------
 
-    Both real backends own a ``concurrent.futures`` executor and translate
-    submit/cancel into futures calls. The asyncio backend is *not* a
-    BackendExecutor — it runs cooperatively inside the runner's loop and
-    needs no pool.
+
+@dataclass(frozen=True, slots=True)
+class Pool:
+    """Configuration for one named concurrency pool.
+
+    ``kind`` picks the runtime: ``"asyncio"`` runs inline on the runner's
+    event loop, ``"thread"`` uses a :class:`ThreadPoolExecutor`, and
+    ``"process"`` uses a :class:`ProcessPoolExecutor`. ``max_workers`` caps
+    concurrent attempts on this pool.
+
+    ``reserve_for`` lets you protect headroom for high-priority task sources:
+    tasks whose ``source`` is in ``reserve_for`` may use every slot, while
+    other sources are capped at ``max_workers - reserved_slots``. When
+    ``reserve_for`` is non-empty, ``reserved_slots`` defaults to 1 — at least
+    one slot is always available for the privileged sources. Mirrors the
+    background-task-reservation pattern from the consumer's in-house queue.
     """
 
     name: str
+    kind: PoolKind = "asyncio"
+    max_workers: int = 8
+    reserve_for: tuple[str, ...] = ()
+    reserved_slots: int = -1  # -1 = "auto: 1 if reserve_for else 0"
+
+    def __post_init__(self) -> None:
+        if self.max_workers < 1:
+            raise ValueError(
+                f"Pool {self.name!r}: max_workers must be >= 1, got {self.max_workers}"
+            )
+        if self.kind not in ("asyncio", "thread", "process"):
+            raise ValueError(
+                f"Pool {self.name!r}: kind must be 'asyncio', 'thread', or 'process'; "
+                f"got {self.kind!r}"
+            )
+        # Resolve auto reserved_slots in-place via object.__setattr__ (frozen dataclass).
+        if self.reserved_slots == -1:
+            object.__setattr__(self, "reserved_slots", 1 if self.reserve_for else 0)
+        if self.reserved_slots < 0:
+            raise ValueError(
+                f"Pool {self.name!r}: reserved_slots must be >= 0, got {self.reserved_slots}"
+            )
+        if self.reserved_slots >= self.max_workers:
+            raise ValueError(
+                f"Pool {self.name!r}: reserved_slots ({self.reserved_slots}) must be "
+                f"strictly less than max_workers ({self.max_workers})"
+            )
+
+    def is_privileged(self, source: str) -> bool:
+        """True iff a task with this source may consume reserved slots.
+
+        Sources in :attr:`reserve_for` are privileged; everything else
+        competes for the unprivileged portion of the pool (max_workers minus
+        reserved_slots).
+        """
+        return not self.reserve_for or source in self.reserve_for
+
+    def unprivileged_cap(self) -> int:
+        """Maximum concurrent unprivileged tasks on this pool.
+
+        Equal to ``max_workers - reserved_slots`` — the rest of the pool is
+        always reserved for sources in :attr:`reserve_for`.
+        """
+        return self.max_workers - self.reserved_slots
+
+
+# ---------- pool executors ----------
+
+
+class PoolExecutor:
+    """Base for thread/process pool runtimes.
+
+    Both real executors own a :mod:`concurrent.futures` executor and translate
+    submit/cancel into futures calls. The asyncio kind has no
+    :class:`PoolExecutor` — it runs cooperatively inside the runner's loop and
+    needs no pool.
+    """
+
+    pool: Pool
     _executor: ThreadPoolExecutor | ProcessPoolExecutor
 
     def execute(
@@ -61,7 +136,7 @@ class BackendExecutor:
         self._executor.shutdown(wait=wait)
 
 
-class ThreadBackend(BackendExecutor):
+class ThreadPool(PoolExecutor):
     """Runs each attempt on a :class:`concurrent.futures.ThreadPoolExecutor`.
 
     Cancellation is cooperative — the task body must check
@@ -70,11 +145,10 @@ class ThreadBackend(BackendExecutor):
     shutdown if it ignores cooperative signals.
     """
 
-    name = "thread"
-
-    def __init__(self, max_workers: int) -> None:
+    def __init__(self, pool: Pool) -> None:
+        self.pool = pool
         self._executor = ThreadPoolExecutor(
-            max_workers=max_workers, thread_name_prefix="pyworkflowy"
+            max_workers=pool.max_workers, thread_name_prefix=f"pyworkflowy-{pool.name}"
         )
 
     def execute(
@@ -93,11 +167,11 @@ class ThreadBackend(BackendExecutor):
         except TimeoutError as exc:
             cancel_event.set()
             raise TaskTimeoutError(
-                f"Task {task_name!r} exceeded its timeout of {timeout}s on the thread backend"
+                f"Task {task_name!r} exceeded its timeout of {timeout}s on pool {self.pool.name!r} (thread)"
             ) from exc
 
 
-class ProcessBackend(BackendExecutor):
+class ProcessPool(PoolExecutor):
     """Runs each attempt on a :class:`concurrent.futures.ProcessPoolExecutor`.
 
     Task functions must be importable (top-level or class-level — not nested
@@ -107,10 +181,9 @@ class ProcessBackend(BackendExecutor):
     *force* terminate is intentionally avoided to keep pool stability.
     """
 
-    name = "process"
-
-    def __init__(self, max_workers: int) -> None:
-        self._executor = ProcessPoolExecutor(max_workers=max_workers)
+    def __init__(self, pool: Pool) -> None:
+        self.pool = pool
+        self._executor = ProcessPoolExecutor(max_workers=pool.max_workers)
 
     def execute(
         self,
@@ -128,21 +201,24 @@ class ProcessBackend(BackendExecutor):
         except TimeoutError as exc:
             future.cancel()
             raise TaskTimeoutError(
-                f"Task {task_name!r} exceeded its timeout of {timeout}s on the process backend"
+                f"Task {task_name!r} exceeded its timeout of {timeout}s on pool {self.pool.name!r} (process)"
             ) from exc
 
 
-def build_backend(name: str, max_workers: int) -> BackendExecutor:
-    """Build a :class:`BackendExecutor` for ``name``.
+def build_pool_executor(pool: Pool) -> PoolExecutor:
+    """Build a :class:`PoolExecutor` for ``pool``.
 
-    The asyncio backend is special-cased upstream and does not produce a
-    :class:`BackendExecutor` — only ``thread`` and ``process`` return one.
+    The asyncio kind is special-cased upstream and does not produce a
+    :class:`PoolExecutor` — only ``thread`` and ``process`` return one.
     """
-    if name == "thread":
-        return ThreadBackend(max_workers)
-    if name == "process":
-        return ProcessBackend(max_workers)
-    raise ValueError(f"Unknown backend {name!r}; expected 'thread' or 'process'.")
+    if pool.kind == "thread":
+        return ThreadPool(pool)
+    if pool.kind == "process":
+        return ProcessPool(pool)
+    raise ValueError(
+        f"Pool {pool.name!r}: kind={pool.kind!r} does not need an executor "
+        "(asyncio kind runs inline on the runner's loop)."
+    )
 
 
 # ---------- asyncio backend ----------
@@ -164,9 +240,9 @@ async def asyncio_execute(
 
     Supports both sync and async ``fn``. Sync ``fn`` runs inline on the loop
     (we deliberately don't shove it onto a thread — if the user wanted that,
-    they'd pick the ``thread`` backend). Cancellation works cooperatively
-    via asyncio's normal task cancellation machinery; the runner also sets
-    ``cancel_event`` for parity with the other backends.
+    they'd pick a ``thread`` pool). Cancellation works cooperatively via
+    asyncio's normal task cancellation machinery; the runner also sets
+    ``cancel_event`` for parity with the other pool kinds.
     """
     token = setup()
     try:
@@ -179,13 +255,13 @@ async def asyncio_execute(
             except TimeoutError as exc:
                 cancel_event.set()
                 raise TaskTimeoutError(
-                    f"Task {task_name!r} exceeded its timeout of {timeout}s on the asyncio backend"
+                    f"Task {task_name!r} exceeded its timeout of {timeout}s on the asyncio pool"
                 ) from exc
             except asyncio.CancelledError as exc:
                 cancel_event.set()
                 raise TaskCancelledError(f"Task {task_name!r} was cancelled") from exc
         # Sync fn on asyncio: run inline. Timeout is checked *after*; for
-        # CPU-bound sync code, prefer the thread backend.
+        # CPU-bound sync code, prefer a thread pool.
         if timeout is not None:
             loop = asyncio.get_running_loop()
             start = loop.time()
@@ -194,7 +270,7 @@ async def asyncio_execute(
             if elapsed > timeout:
                 raise TaskTimeoutError(
                     f"Task {task_name!r} took {elapsed:.3f}s, exceeding timeout of {timeout}s "
-                    "(sync function on asyncio backend; consider backend='thread' for "
+                    "(sync function on asyncio pool; consider a thread pool for "
                     "true timeout cancellation)",
                     elapsed=elapsed,
                 )
@@ -202,3 +278,7 @@ async def asyncio_execute(
         return fn(*args, **kwargs)
     finally:
         teardown(token)
+
+
+# Silence unused-import linters for re-exports below.
+_ = field

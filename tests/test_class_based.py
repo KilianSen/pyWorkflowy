@@ -23,7 +23,7 @@ def test_subclass_produces_task() -> None:
 def test_class_attributes_carry_over() -> None:
     class Slow(TaskBase):
         name = "slow"
-        backend = "thread"
+        pool = "thread"
         retries = 3
         timeout = 5.0
 
@@ -31,7 +31,7 @@ def test_class_attributes_carry_over() -> None:
             return 1
 
     t = Slow()
-    assert t.backend == "thread"
+    assert t.pool == "thread"
     assert t.retries == 3
     assert t.timeout == 5.0
 

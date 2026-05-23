@@ -39,7 +39,7 @@ async def test_async_no_timeout_when_fast() -> None:
 
 
 def test_thread_timeout_fires() -> None:
-    @task(backend="thread", timeout=0.1)
+    @task(pool="thread", timeout=0.1)
     def slow() -> int:
         time.sleep(1.0)
         return 1
@@ -56,7 +56,7 @@ def test_timeout_not_retried() -> None:
     """Timeouts should not trigger retries (they're treated as final)."""
     calls: list[int] = []
 
-    @task(backend="thread", timeout=0.05, retries=3, backoff="none")
+    @task(pool="thread", timeout=0.05, retries=3, backoff="none")
     def slow() -> int:
         calls.append(1)
         time.sleep(0.5)

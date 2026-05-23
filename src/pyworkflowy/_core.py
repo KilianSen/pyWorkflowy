@@ -2,7 +2,8 @@
 
 These pieces are deliberately decoupled from execution — they describe *what*
 a task is and *what a submitted task looks like*, leaving the actual scheduling
-to :mod:`pyworkflowy._runner` and the backend code in :mod:`pyworkflowy._backends`.
+to :mod:`pyworkflowy._runner` and the pool executors in
+:mod:`pyworkflowy._backends`.
 """
 
 from __future__ import annotations
@@ -23,7 +24,6 @@ if TYPE_CHECKING:
     from pyworkflowy._runner import TaskRunner
 
 __all__ = [
-    "Backend",
     "Backoff",
     "DepFailurePolicy",
     "Task",
@@ -37,11 +37,11 @@ __all__ = [
 
 R = TypeVar("R")
 
-Backend = Literal["asyncio", "thread", "process"]
 Backoff = Literal["none", "linear", "exponential"]
 DepFailurePolicy = Literal["skip", "fail", "run-anyway"]
 
 _DEFAULT_RETRY_ON: tuple[type[BaseException], ...] = (Exception,)
+DEFAULT_POOL_NAME = "default"
 
 
 class TaskStatus(StrEnum):
@@ -108,14 +108,30 @@ class TaskResult(Generic[R]):
 class TaskContext:
     """Ambient per-task state, exposed via :func:`current_task`.
 
-    Read-only from user code — fields are owned by the runner. Useful for
-    logging the current task name and attempt number from inside the task
-    body itself.
+    Most fields are read-only from user code — they're owned by the runner.
+    The exception is progress: task bodies call :meth:`update_progress` to
+    report how far they've gotten, which the runner exposes via
+    :attr:`TaskHandle.progress` (and persists, throttled, through the
+    configured checkpointer).
     """
 
     name: str
     attempt: int
     cancel_event: threading.Event
+    _handle: TaskHandle[Any] | None = None
+
+    def update_progress(self, fraction: float, message: str | None = None) -> None:
+        """Report progress on the currently running task.
+
+        ``fraction`` is clamped to ``[0.0, 1.0]``. The runner persists
+        progress at most ~1 Hz (skipping deltas < 2 % outside terminal
+        transitions) — call this as often as you like; the throttle lives
+        in the runner.
+        """
+        if self._handle is None:
+            return
+        clamped = max(0.0, min(1.0, float(fraction)))
+        self._handle._update_progress(clamped, message)
 
 
 _current_task: ContextVar[TaskContext | None] = ContextVar("pyworkflowy_current_task", default=None)
@@ -127,7 +143,7 @@ def current_task() -> TaskContext | None:
     Useful for shared utilities that want to log the task name without
     threading it through every call. Implemented via
     :class:`contextvars.ContextVar` so it works across asyncio tasks; the
-    thread and process backends populate it manually at entry.
+    thread and process pools populate it manually at entry.
     """
     return _current_task.get()
 
@@ -136,15 +152,19 @@ def current_task() -> TaskContext | None:
 class Task(Generic[R]):
     """A reusable, configured callable wrapped for the runner.
 
-    Built by the :func:`task` decorator or by subclassing :class:`Task`-like
-    classes (see :class:`ClassTask` in this module). All execution-shaping
-    knobs live here; ``.submit(...)`` returns a :class:`TaskHandle` bound to
-    the currently active runner.
+    Built by the :func:`task` decorator or by subclassing :class:`TaskBase`.
+    All execution-shaping knobs live here; ``.submit(...)`` returns a
+    :class:`TaskHandle` bound to the currently active runner.
+
+    The ``pool`` field names the runner pool the task wants to run on. The
+    runner validates the pool exists (and that its kind matches the task — for
+    instance, async functions need a pool of kind ``asyncio``) at submit time,
+    not at decoration time.
     """
 
     fn: Callable[..., Any]
     name: str
-    backend: Backend = "asyncio"
+    pool: str = DEFAULT_POOL_NAME
     retries: int = 0
     timeout: float | None = None
     backoff: Backoff = "exponential"
@@ -152,6 +172,9 @@ class Task(Generic[R]):
     backoff_max: float = 30.0
     retry_on: tuple[type[BaseException], ...] = _DEFAULT_RETRY_ON
     on_dep_failure: DepFailurePolicy = "fail"
+    dedup_by: tuple[str, ...] = ()
+    triggers: tuple[str, ...] = ()
+    payload_map: tuple[tuple[str, str], ...] = ()
 
     @property
     def is_async(self) -> bool:
@@ -176,14 +199,25 @@ class Task(Generic[R]):
         *args: Any,
         depends_on: Iterable[TaskHandle[Any]] = (),
         runner: TaskRunner | None = None,
+        source: str = "manual",
+        dedup_key: str | None = None,
         **kwargs: Any,
     ) -> TaskHandle[R]:
         """Submit this task to ``runner`` (or the ambient one) and return its handle.
 
         ``depends_on`` lists the handles that must finish before this task
         becomes ``READY``. The ``on_dep_failure`` policy on this :class:`Task`
-        decides what happens if any of them ended in a non-``COMPLETED``
-        state.
+        decides what happens if any of them ended in a non-``COMPLETED`` state.
+
+        ``source`` is a free-form tag describing where the submission came from
+        (``"manual"``, ``"cron"``, ``"event"``, ``"background"``, ...). Pools
+        with a ``reserve_for`` rule use it to decide whether this task may
+        claim a reserved slot.
+
+        ``dedup_key`` (or this task's ``dedup_by`` config, which auto-computes
+        a key from kwargs) suppresses duplicate pending submissions: if a
+        non-terminal handle already exists with the same ``(task.name, key)``
+        pair, that handle is returned instead of creating a new one.
         """
         from pyworkflowy._runner import get_current_runner  # local import to break cycle
 
@@ -194,7 +228,14 @@ class Task(Generic[R]):
                 "submission code in `with TaskRunner() as runner:` (or pass "
                 "`runner=` explicitly)."
             )
-        return active.submit(self, *args, depends_on=tuple(depends_on), **kwargs)
+        return active.submit(
+            self,
+            *args,
+            depends_on=tuple(depends_on),
+            source=source,
+            dedup_key=dedup_key,
+            **kwargs,
+        )
 
 
 class TaskHandle(Generic[R]):
@@ -206,9 +247,15 @@ class TaskHandle(Generic[R]):
     """
 
     __slots__ = (
+        "_aiotask",
         "_cancel_event",
+        "_dedup_key",
         "_done_event",
+        "_last_progress_write",
+        "_progress",
+        "_progress_message",
         "_result",
+        "_retry_at",
         "_runner",
         "_status",
         "args",
@@ -216,6 +263,7 @@ class TaskHandle(Generic[R]):
         "id",
         "kwargs",
         "name",
+        "source",
         "task",
     )
 
@@ -228,6 +276,8 @@ class TaskHandle(Generic[R]):
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
         depends_on: tuple[TaskHandle[Any], ...],
+        source: str = "manual",
+        dedup_key: str | None = None,
     ) -> None:
         self._runner = runner
         self.task = task
@@ -236,10 +286,23 @@ class TaskHandle(Generic[R]):
         self.args = args
         self.kwargs = kwargs
         self.depends_on = depends_on
+        self.source = source
+        self._dedup_key = dedup_key
         self._status: TaskStatus = TaskStatus.PENDING
         self._result: TaskResult[R] | None = None
         self._done_event = threading.Event()
         self._cancel_event = threading.Event()
+        # The asyncio.Task wrapping the runner's per-handle coroutine. Set when
+        # the runner schedules the handle; consumed by cross-thread cancel.
+        self._aiotask: asyncio.Task[None] | None = None
+        # Progress reporting state — written by TaskContext.update_progress.
+        self._progress: float = 0.0
+        self._progress_message: str | None = None
+        self._last_progress_write: float = 0.0
+        # When non-None, the task is sleeping until this wall-clock timestamp
+        # before its next retry attempt. Set by the runner's retry loop;
+        # cleared when the next attempt begins or the task reaches terminal.
+        self._retry_at: float | None = None
 
     def __repr__(self) -> str:
         return f"TaskHandle(id={self.id!r}, name={self.name!r}, status={self._status.value!r})"
@@ -247,6 +310,35 @@ class TaskHandle(Generic[R]):
     @property
     def status(self) -> TaskStatus:
         return self._status
+
+    @property
+    def progress(self) -> float:
+        """Fraction of work completed in ``[0.0, 1.0]``.
+
+        Updated by the task body via :meth:`TaskContext.update_progress`; the
+        runner reads this when checkpointing and surfaces it to any UI built
+        on top of the handle.
+        """
+        return self._progress
+
+    @property
+    def progress_message(self) -> str | None:
+        """Optional free-form status message accompanying :attr:`progress`."""
+        return self._progress_message
+
+    @property
+    def retry_at(self) -> float | None:
+        """Wall-clock timestamp at which the next retry attempt will begin.
+
+        ``None`` outside the backoff window between attempts. Useful for
+        rendering "retrying in 2m" in a UI without poking runner internals.
+        """
+        return self._retry_at
+
+    @property
+    def dedup_key(self) -> str | None:
+        """The deduplication key this handle was submitted under, if any."""
+        return self._dedup_key
 
     def done(self) -> bool:
         """True iff the task has reached a terminal status."""
@@ -260,6 +352,9 @@ class TaskHandle(Generic[R]):
         ``current_task().cancel_event``); best-effort terminate() for
         processes. Returns ``True`` if cancellation was newly requested,
         ``False`` if the task was already terminal or cancelling.
+
+        Safe to call from any thread — for asyncio tasks the runner schedules
+        the actual ``asyncio.Task.cancel()`` via ``call_soon_threadsafe``.
         """
         if self.done():
             return False
@@ -322,7 +417,18 @@ class TaskHandle(Generic[R]):
     def _complete(self, result: TaskResult[R]) -> None:
         self._result = result
         self._status = result.status
+        self._retry_at = None
+        # Snap progress to 1.0 on successful completion; leave as-is otherwise.
+        if result.status == TaskStatus.COMPLETED:
+            self._progress = 1.0
         self._done_event.set()
+        self._runner._on_handle_terminal(self)
+
+    def _update_progress(self, fraction: float, message: str | None) -> None:
+        self._progress = fraction
+        if message is not None:
+            self._progress_message = message
+        self._runner._maybe_persist_progress(self)
 
 
 # ---------- decorator surface ----------
@@ -358,7 +464,7 @@ def _build_task(
     fn: Callable[..., Any],
     *,
     name: str | None,
-    backend: Backend,
+    pool: str,
     retries: int,
     timeout: float | None,
     backoff: Backoff,
@@ -366,15 +472,12 @@ def _build_task(
     backoff_max: float,
     retry_on: type[BaseException] | tuple[type[BaseException], ...] | None,
     on_dep_failure: DepFailurePolicy,
+    dedup_by: tuple[str, ...] = (),
+    triggers: tuple[str, ...] = (),
+    payload_map: dict[str, str] | tuple[tuple[str, str], ...] | None = None,
 ) -> Task[Any]:
-    if backend not in ("asyncio", "thread", "process"):
-        raise ValueError(f"backend must be 'asyncio', 'thread', or 'process'; got {backend!r}")
-    if iscoroutinefunction(fn) and backend != "asyncio":
-        raise ValueError(
-            f"Task {fn!r} is async but backend={backend!r} was requested. Async "
-            "tasks can only run on the 'asyncio' backend — use a sync `def` for "
-            "thread/process execution."
-        )
+    if not isinstance(pool, str) or not pool:
+        raise ValueError(f"pool must be a non-empty string; got {pool!r}")
     if retries < 0:
         raise ValueError(f"retries must be >= 0, got {retries}")
     if backoff not in ("none", "linear", "exponential"):
@@ -389,10 +492,23 @@ def _build_task(
         raise ValueError(
             f"on_dep_failure must be 'skip', 'fail', or 'run-anyway'; got {on_dep_failure!r}"
         )
+    if not isinstance(dedup_by, tuple) or not all(isinstance(k, str) for k in dedup_by):
+        raise TypeError(
+            f"dedup_by must be a tuple of kwarg-name strings; got {dedup_by!r}"
+        )
+    triggers_t: tuple[str, ...] = tuple(triggers)
+    if not all(isinstance(t, str) for t in triggers_t):
+        raise TypeError(f"triggers must be strings; got {triggers!r}")
+    if payload_map is None:
+        payload_map_t: tuple[tuple[str, str], ...] = ()
+    elif isinstance(payload_map, dict):
+        payload_map_t = tuple(sorted(payload_map.items()))
+    else:
+        payload_map_t = tuple(payload_map)
     return Task(
         fn=fn,
         name=_resolve_task_name(fn, name),
-        backend=backend,
+        pool=pool,
         retries=retries,
         timeout=timeout,
         backoff=backoff,
@@ -400,6 +516,9 @@ def _build_task(
         backoff_max=backoff_max,
         retry_on=_validate_retry_on(retry_on),
         on_dep_failure=on_dep_failure,
+        dedup_by=dedup_by,
+        triggers=triggers_t,
+        payload_map=payload_map_t,
     )
 
 
@@ -407,7 +526,7 @@ def task(
     fn: Callable[..., Any] | None = None,
     *,
     name: str | None = None,
-    backend: Backend = "asyncio",
+    pool: str = DEFAULT_POOL_NAME,
     retries: int = 0,
     timeout: float | None = None,
     backoff: Backoff = "exponential",
@@ -416,16 +535,24 @@ def task(
     retry_on: type[BaseException] | tuple[type[BaseException], ...] | None = None,
     on_dep_failure: DepFailurePolicy = "fail",
     max_attempts: int | None = None,
+    dedup_by: tuple[str, ...] = (),
+    triggers: tuple[str, ...] = (),
+    payload_map: dict[str, str] | None = None,
 ) -> Any:
     """Wrap a callable as a :class:`Task`.
 
-    Two call styles, mirroring :func:`pyhooky.hook`::
+    Two call styles::
 
         @task                       # bare — auto-named from module.qualname
-        @task(name="checkout", retries=3, timeout=10.0, backend="thread")
+        @task(name="checkout", retries=3, timeout=10.0, pool="io")
 
-    ``max_attempts`` is sugar for ``retries = max_attempts - 1`` — pick whichever
-    framing reads better. They are mutually exclusive.
+    ``pool`` names a runner pool. Default runners expose three named pools
+    out of the box — ``"default"`` (asyncio), ``"thread"``, and ``"process"`` —
+    sized via ``TaskRunner(max_workers=...)``. Configure your own with
+    ``TaskRunner(pools={"io": Pool(...), ...})``.
+
+    ``max_attempts`` is sugar for ``retries = max_attempts - 1`` — pick
+    whichever framing reads better. They are mutually exclusive.
     """
     if max_attempts is not None:
         if retries:
@@ -438,7 +565,7 @@ def task(
         return _build_task(
             fn,
             name=name,
-            backend=backend,
+            pool=pool,
             retries=retries,
             timeout=timeout,
             backoff=backoff,
@@ -446,13 +573,16 @@ def task(
             backoff_max=backoff_max,
             retry_on=retry_on,
             on_dep_failure=on_dep_failure,
+            dedup_by=dedup_by,
+            triggers=triggers,
+            payload_map=payload_map,
         )
 
     def decorator(f: Callable[..., Any]) -> Task[Any]:
         return _build_task(
             f,
             name=name,
-            backend=backend,
+            pool=pool,
             retries=retries,
             timeout=timeout,
             backoff=backoff,
@@ -460,6 +590,9 @@ def task(
             backoff_max=backoff_max,
             retry_on=retry_on,
             on_dep_failure=on_dep_failure,
+            dedup_by=dedup_by,
+            triggers=triggers,
+            payload_map=payload_map,
         )
 
     return decorator

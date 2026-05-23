@@ -29,7 +29,7 @@ def test_json_checkpointer_writes_state(tmp_path: Path) -> None:
 
     assert cp_path.exists()
     state = json.loads(cp_path.read_text())
-    assert state["version"] == 1
+    assert state["version"] == 2
     assert len(state["handles"]) == 1
     entry = state["handles"][0]
     assert entry["status"] == TaskStatus.COMPLETED.value
@@ -133,7 +133,7 @@ def test_pickle_checkpointer(tmp_path: Path) -> None:
     assert cp_path.exists()
     loaded = cp.load()
     assert loaded is not None
-    assert loaded["version"] == 1
+    assert loaded["version"] == 2
 
 
 def test_load_returns_none_for_missing_file(tmp_path: Path) -> None:

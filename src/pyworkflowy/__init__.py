@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from pyworkflowy._backends import Pool, PoolKind
 from pyworkflowy._classbased import TaskBase
+from pyworkflowy._events import EventHandler, EventSource
 from pyworkflowy._core import (
-    Backend,
     Backoff,
     DepFailurePolicy,
     Task,
@@ -28,15 +29,18 @@ from pyworkflowy.exceptions import (
 )
 
 __all__ = [
-    "Backend",
     "Backoff",
     "CheckpointError",
     "Checkpointer",
     "CycleError",
     "DepFailurePolicy",
     "DependencyFailedError",
+    "EventHandler",
+    "EventSource",
     "JSONCheckpointer",
     "PickleCheckpointer",
+    "Pool",
+    "PoolKind",
     "RetryExhaustedError",
     "Task",
     "TaskBase",
@@ -53,4 +57,4 @@ __all__ = [
     "task",
 ]
 
-__version__ = "0.1.0"
+__version__ = "0.5.0"

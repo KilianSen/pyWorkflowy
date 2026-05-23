@@ -18,14 +18,14 @@ def test_bare_decorator() -> None:
 
 
 def test_decorator_with_args() -> None:
-    @task(name="custom", retries=2, timeout=5.0, backend="thread")
+    @task(name="custom", retries=2, timeout=5.0, pool="thread")
     def f(x: int) -> int:
         return x + 1
 
     assert f.name == "custom"
     assert f.retries == 2
     assert f.timeout == 5.0
-    assert f.backend == "thread"
+    assert f.pool == "thread"
     assert f.max_attempts == 3
 
 
@@ -38,20 +38,26 @@ def test_async_detected() -> None:
     assert af.is_async
 
 
-def test_async_with_thread_backend_rejected() -> None:
-    with pytest.raises(ValueError, match="async"):
+def test_async_with_thread_pool_rejected() -> None:
+    @task(pool="thread")
+    async def af() -> None:
+        return None
 
-        @task(backend="thread")
-        async def af() -> None:
-            return None
+    # The kind/async mismatch is detected at submit time, not at decoration time:
+    # decoration doesn't know what kind the pool has.
+    with TaskRunner() as runner:
+        with pytest.raises(ValueError, match="async"):
+            runner.submit(af)
 
 
-def test_invalid_backend() -> None:
-    with pytest.raises(ValueError, match="backend"):
+def test_unknown_pool_rejected_at_submit() -> None:
+    @task(pool="nope")
+    def f() -> None:
+        return None
 
-        @task(backend="nope")  # type: ignore[arg-type]
-        def f() -> None:
-            return None
+    with TaskRunner() as runner:
+        with pytest.raises(ValueError, match="no pool by that name"):
+            runner.submit(f)
 
 
 def test_retries_negative() -> None:

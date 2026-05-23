@@ -141,7 +141,7 @@ def test_backoff_max_caps() -> None:
     t = _build_task(
         lambda: 1,
         name="x",
-        backend="asyncio",
+        pool="default",
         retries=10,
         timeout=None,
         backoff="exponential",
@@ -161,7 +161,7 @@ def test_backoff_none() -> None:
     t = _build_task(
         lambda: 1,
         name="x",
-        backend="asyncio",
+        pool="default",
         retries=2,
         timeout=None,
         backoff="none",

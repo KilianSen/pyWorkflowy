@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from pyworkflowy._core import (
-    Backend,
+    DEFAULT_POOL_NAME,
     Backoff,
     DepFailurePolicy,
     Task,
@@ -33,7 +33,7 @@ class TaskBase:
     """Base class for class-based task definitions.
 
     Subclass and override :meth:`run` (sync or async). Class-level attributes
-    (``name``, ``backend``, ``retries``, ``timeout``, ``backoff``,
+    (``name``, ``pool``, ``retries``, ``timeout``, ``backoff``,
     ``backoff_base``, ``backoff_max``, ``retry_on``, ``on_dep_failure``)
     configure the task. Instantiating returns a fully configured
     :class:`pyworkflowy.Task` — the instance is *the* task, not a wrapper around
@@ -41,7 +41,7 @@ class TaskBase:
 
         class FetchUser(TaskBase):
             name = "fetch-user"
-            backend = "thread"
+            pool = "thread"
             retries = 2
 
             def run(self, user_id: int) -> dict[str, Any]:
@@ -52,7 +52,7 @@ class TaskBase:
     """
 
     name: str | None = None
-    backend: Backend = "asyncio"
+    pool: str = DEFAULT_POOL_NAME
     retries: int = 0
     timeout: float | None = None
     backoff: Backoff = "exponential"
@@ -61,6 +61,9 @@ class TaskBase:
     retry_on: type[BaseException] | tuple[type[BaseException], ...] | None = None
     on_dep_failure: DepFailurePolicy = "fail"
     max_attempts: int | None = None
+    dedup_by: tuple[str, ...] = ()
+    triggers: tuple[str, ...] = ()
+    payload_map: dict[str, str] | None = None
 
     def run(self, *args: Any, **kwargs: Any) -> Any:
         """Override me. Sync or async ``def`` both fine."""
@@ -97,7 +100,7 @@ class TaskBase:
         return _build_task(
             run_method,
             name=cls.name or f"{cls.__module__}.{cls.__qualname__}",
-            backend=cls.backend,
+            pool=cls.pool,
             retries=retries,
             timeout=cls.timeout,
             backoff=cls.backoff,
@@ -105,4 +108,7 @@ class TaskBase:
             backoff_max=cls.backoff_max,
             retry_on=cls.retry_on,
             on_dep_failure=cls.on_dep_failure,
+            dedup_by=cls.dedup_by,
+            triggers=cls.triggers,
+            payload_map=cls.payload_map,
         )

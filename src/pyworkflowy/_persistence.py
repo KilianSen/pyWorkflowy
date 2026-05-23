@@ -2,27 +2,50 @@
 
 Default backend is :class:`JSONCheckpointer` — JSON-only, requires args to be
 JSON-serialisable. :class:`PickleCheckpointer` is the more permissive option;
-implement :class:`Checkpointer` to plug in your own (SQLite, Redis, etc.).
+implement :class:`Checkpointer` to plug in your own (SQLite, Redis, Postgres,
+etc.).
 
-State shape (JSON-flavoured)::
+State schema (v2)::
 
     {
-        "version": 1,
+        "version": 2,
         "handles": [
             {
                 "id": "...",
                 "name": "...",
-                "status": "completed",
+                "status": "running",
                 "args": [...],
                 "kwargs": {...},
                 "depends_on": ["id1", "id2"],
-                "result": <encoded value or null>,
-                "error": "...",       # repr if present
-                "attempts": 1
+                "pool": "io",
+                "source": "manual",
+                "dedup_key": None,
+                "progress": 0.42,
+                "progress_message": "shelf 3/7",
+                "retry_at": None,
+                "value": None,
+                "error": None,
+                "attempts": 1,
+                "started_at": 1700000000.0,
+                "finished_at": None,
             },
             ...
         ]
     }
+
+The ABC provides two surfaces:
+
+* **Snapshot mode** (``save``/``load``) writes the entire state dictionary in
+  one shot. Default backends — :class:`JSONCheckpointer`, :class:`PickleCheckpointer`
+  — are snapshot-based.
+* **Row-grained mode** (``save_handle``/``delete_handle``/``query``) updates a
+  single handle's row. Default implementations cascade to ``save`` (load,
+  mutate, write) so existing subclasses keep working. SQL-backed implementations
+  should override these for efficient UPSERT/DELETE/SELECT.
+
+The runner prefers row-grained calls for progress updates and status
+transitions; consumers that only override ``save``/``load`` still work, they
+just pay a whole-state-rewrite per change.
 """
 
 from __future__ import annotations
@@ -45,15 +68,21 @@ __all__ = [
     "ensure_jsonable",
 ]
 
-CHECKPOINT_VERSION = 1
+CHECKPOINT_VERSION = 2
 
 
 class Checkpointer(ABC):
     """ABC for checkpoint storage backends.
 
-    Implementations must be safe to call from a single writer (the runner) —
-    concurrent writers are not supported. Reads happen at resume time, before
-    the runner is active.
+    Snapshot methods (:meth:`save`, :meth:`load`) are required; row-grained
+    methods (:meth:`save_handle`, :meth:`delete_handle`, :meth:`query`) have
+    default implementations that cascade through :meth:`save`/:meth:`load`,
+    so a minimal subclass only needs to implement the two abstract methods.
+
+    Backends must be safe to call from a single writer (the runner) —
+    concurrent writers are not supported by default. SQL-backed implementations
+    can permit concurrent reads (e.g. for a UI listing tasks) by overriding
+    :meth:`query`.
     """
 
     @abstractmethod
@@ -61,6 +90,50 @@ class Checkpointer(ABC):
 
     @abstractmethod
     def load(self) -> dict[str, Any] | None: ...
+
+    def save_handle(self, entry: dict[str, Any]) -> None:
+        """Persist a single handle's row.
+
+        Default implementation: read the entire state, replace the matching
+        entry by ``id`` (or append if new), write whole state. Override in
+        row-grained backends with an UPSERT.
+        """
+        state = self.load() or {"version": CHECKPOINT_VERSION, "handles": []}
+        handles: list[dict[str, Any]] = state.get("handles", [])
+        target_id = entry.get("id")
+        for i, h in enumerate(handles):
+            if h.get("id") == target_id:
+                handles[i] = entry
+                break
+        else:
+            handles.append(entry)
+        state["handles"] = handles
+        self.save(state)
+
+    def delete_handle(self, handle_id: str) -> None:
+        """Drop a single handle by id. No-op if the id is not present."""
+        state = self.load()
+        if state is None:
+            return
+        handles = state.get("handles", [])
+        state["handles"] = [h for h in handles if h.get("id") != handle_id]
+        self.save(state)
+
+    def query(self, **filters: Any) -> list[dict[str, Any]]:
+        """Return handle entries matching the given equality filters.
+
+        Default implementation scans the loaded state. SQL backends should
+        override with a real query for pagination, ordering, and aggregates.
+        Filter keys are column names (``status``, ``name``, ``pool``,
+        ``source``, ...); values are compared with ``==``.
+        """
+        state = self.load()
+        if state is None:
+            return []
+        results: list[dict[str, Any]] = list(state.get("handles", []))
+        for k, v in filters.items():
+            results = [h for h in results if h.get(k) == v]
+        return results
 
 
 def ensure_jsonable(value: Any, *, where: str) -> None:
