@@ -78,22 +78,26 @@ def test_resume_with_matching_id_skips_run(tmp_path: Path) -> None:
     runner.shutdown()
 
     # Hand-craft a checkpoint that uses a known id, then resume.
-    cp_path.write_text(json.dumps({
-        "version": 1,
-        "handles": [
+    cp_path.write_text(
+        json.dumps(
             {
-                "id": "preset#abc",
-                "name": "step",
-                "args": [9],
-                "kwargs": {},
-                "depends_on": [],
-                "status": "completed",
-                "value": 9,
-                "error": None,
-                "attempts": 1,
+                "version": 1,
+                "handles": [
+                    {
+                        "id": "preset#abc",
+                        "name": "step",
+                        "args": [9],
+                        "kwargs": {},
+                        "depends_on": [],
+                        "status": "completed",
+                        "value": 9,
+                        "error": None,
+                        "attempts": 1,
+                    }
+                ],
             }
-        ],
-    }))
+        )
+    )
 
     runner2 = TaskRunner.resume(str(cp_path))
     # Manually call submit which calls _next_handle_id — but the resumed map

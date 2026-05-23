@@ -153,6 +153,7 @@ def test_scheduler_with_runner_context() -> None:
         time.sleep(0.05)
         # Use ambient runner since runner context is active
         from pyworkflowy._runner import _bind_runner
+
         with _bind_runner(runner):
             fired = sched.tick()
         assert len(fired) == 1

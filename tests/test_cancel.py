@@ -60,6 +60,7 @@ def test_thread_task_cooperative_cancel() -> None:
 
     runner = TaskRunner(on_task_error="continue")
     h = runner.submit(cooperative)
+
     # Submit then schedule a cancel from another thread shortly after run starts.
     def kick() -> None:
         time.sleep(0.05)

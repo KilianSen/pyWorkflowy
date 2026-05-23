@@ -350,8 +350,7 @@ def _validate_retry_on(
     ):
         return retry_on
     raise TypeError(
-        "retry_on must be an exception class or tuple of exception classes; "
-        f"got {retry_on!r}"
+        f"retry_on must be an exception class or tuple of exception classes; got {retry_on!r}"
     )
 
 
@@ -369,9 +368,7 @@ def _build_task(
     on_dep_failure: DepFailurePolicy,
 ) -> Task[Any]:
     if backend not in ("asyncio", "thread", "process"):
-        raise ValueError(
-            f"backend must be 'asyncio', 'thread', or 'process'; got {backend!r}"
-        )
+        raise ValueError(f"backend must be 'asyncio', 'thread', or 'process'; got {backend!r}")
     if iscoroutinefunction(fn) and backend != "asyncio":
         raise ValueError(
             f"Task {fn!r} is async but backend={backend!r} was requested. Async "
@@ -381,9 +378,7 @@ def _build_task(
     if retries < 0:
         raise ValueError(f"retries must be >= 0, got {retries}")
     if backoff not in ("none", "linear", "exponential"):
-        raise ValueError(
-            f"backoff must be 'none', 'linear', or 'exponential'; got {backoff!r}"
-        )
+        raise ValueError(f"backoff must be 'none', 'linear', or 'exponential'; got {backoff!r}")
     if backoff_base < 0:
         raise ValueError(f"backoff_base must be >= 0, got {backoff_base}")
     if backoff_max < 0:

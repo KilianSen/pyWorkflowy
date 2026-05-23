@@ -86,9 +86,7 @@ def check_no_cycle(
         labels = [f"{name_lookup.get(node, node)}({node})" for node in cycle]
     else:
         labels = list(cycle)
-    raise CycleError(
-        "Adding this task would create a dependency cycle: " + " -> ".join(labels)
-    )
+    raise CycleError("Adding this task would create a dependency cycle: " + " -> ".join(labels))
 
 
 def topo_order(deps: Mapping[str, Iterable[str]]) -> list[str]:
@@ -118,7 +116,5 @@ def topo_order(deps: Mapping[str, Iterable[str]]) -> list[str]:
                 ready.append(c)
     if len(order) != len(deps):
         leftover = [n for n in deps if n not in order]
-        raise CycleError(
-            "Dependency graph has a cycle among: " + ", ".join(sorted(leftover))
-        )
+        raise CycleError("Dependency graph has a cycle among: " + ", ".join(sorted(leftover)))
     return order

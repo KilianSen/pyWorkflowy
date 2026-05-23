@@ -73,11 +73,13 @@ def test_timeout_not_retried() -> None:
 
 def test_invalid_timeout() -> None:
     with pytest.raises(ValueError, match="timeout"):
+
         @task(timeout=0)
         def f() -> None:
             return None
 
     with pytest.raises(ValueError, match="timeout"):
+
         @task(timeout=-1.0)
         def f2() -> None:
             return None

@@ -146,13 +146,9 @@ def _parse_range(part: str, lo: int, hi: int, field_name: str, spec: str) -> lis
     try:
         a, b = int(a_str), int(b_str)
     except ValueError as exc:
-        raise ValueError(
-            f"Invalid range in cron field {field_name}={spec!r}: {part!r}"
-        ) from exc
+        raise ValueError(f"Invalid range in cron field {field_name}={spec!r}: {part!r}") from exc
     if a > b or not (lo <= a <= hi) or not (lo <= b <= hi):
-        raise ValueError(
-            f"Range {part!r} out of bounds in cron field {field_name}={spec!r}"
-        )
+        raise ValueError(f"Range {part!r} out of bounds in cron field {field_name}={spec!r}")
     return list(range(a, b + 1))
 
 
@@ -398,6 +394,7 @@ class Scheduler:
                 # log and continue. Tasks that *fired* surface failures via
                 # their handles; the scheduler itself must keep ticking.
                 import logging
+
                 logging.getLogger("pyworkflowy").exception(
                     "pyworkflowy: scheduler tick raised; continuing"
                 )
@@ -414,6 +411,7 @@ class Scheduler:
                 self.tick()
             except Exception:
                 import logging
+
                 logging.getLogger("pyworkflowy").exception(
                     "pyworkflowy: scheduler tick raised; continuing"
                 )

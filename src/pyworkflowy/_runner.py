@@ -125,9 +125,7 @@ class TaskRunner:
         if max_workers < 1:
             raise ValueError(f"max_workers must be >= 1, got {max_workers}")
         if backend not in ("asyncio", "thread", "process"):
-            raise ValueError(
-                f"backend must be 'asyncio', 'thread', or 'process'; got {backend!r}"
-            )
+            raise ValueError(f"backend must be 'asyncio', 'thread', or 'process'; got {backend!r}")
         if on_task_error not in ("raise", "log", "continue"):
             raise ValueError(
                 f"on_task_error must be 'raise', 'log', or 'continue'; got {on_task_error!r}"
@@ -213,9 +211,7 @@ class TaskRunner:
                 on_dep_failure="fail",
             )
         else:
-            raise TypeError(
-                f"submit() expected a Task or callable, got {type(target).__name__}"
-            )
+            raise TypeError(f"submit() expected a Task or callable, got {type(target).__name__}")
 
         depends_on_t = tuple(depends_on)
         # Validate dep handles belong to this runner.
@@ -286,11 +282,7 @@ class TaskRunner:
             from pyworkflowy._dag import topo_order
 
             topo_order(deps_map)
-            pending_ids = [
-                hid
-                for hid, h in self._handles.items()
-                if not h.done()
-            ]
+            pending_ids = [hid for hid, h in self._handles.items() if not h.done()]
         self._loop = asyncio.get_running_loop()
         with _bind_runner(self):
             await self._run_pending(pending_ids)
@@ -398,9 +390,7 @@ class TaskRunner:
         self._maybe_checkpoint()
 
     def _mark_dep_failed(self, handle: TaskHandle[Any]) -> None:
-        failed_names = tuple(
-            d.name for d in handle.depends_on if d.status != TaskStatus.COMPLETED
-        )
+        failed_names = tuple(d.name for d in handle.depends_on if d.status != TaskStatus.COMPLETED)
         err = DependencyFailedError(
             f"Task {handle.name!r} has failed dependencies: {', '.join(failed_names)}",
             failed=failed_names,

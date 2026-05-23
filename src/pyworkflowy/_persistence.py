@@ -133,9 +133,7 @@ class JSONCheckpointer(Checkpointer):
         try:
             return json.loads(data)
         except (TypeError, ValueError) as exc:
-            raise CheckpointError(
-                f"Checkpoint at {self.path!s} is not valid JSON: {exc}"
-            ) from exc
+            raise CheckpointError(f"Checkpoint at {self.path!s} is not valid JSON: {exc}") from exc
 
 
 def _json_default(o: Any) -> Any:

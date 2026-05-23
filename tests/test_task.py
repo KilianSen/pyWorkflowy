@@ -40,6 +40,7 @@ def test_async_detected() -> None:
 
 def test_async_with_thread_backend_rejected() -> None:
     with pytest.raises(ValueError, match="async"):
+
         @task(backend="thread")
         async def af() -> None:
             return None
@@ -47,6 +48,7 @@ def test_async_with_thread_backend_rejected() -> None:
 
 def test_invalid_backend() -> None:
     with pytest.raises(ValueError, match="backend"):
+
         @task(backend="nope")  # type: ignore[arg-type]
         def f() -> None:
             return None
@@ -54,6 +56,7 @@ def test_invalid_backend() -> None:
 
 def test_retries_negative() -> None:
     with pytest.raises(ValueError):
+
         @task(retries=-1)
         def f() -> None:
             return None
@@ -70,6 +73,7 @@ def test_max_attempts_alias() -> None:
 
 def test_max_attempts_conflict() -> None:
     with pytest.raises(ValueError):
+
         @task(retries=1, max_attempts=2)
         def f() -> None:
             return None
