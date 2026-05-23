@@ -1,6 +1,20 @@
 # CHANGELOG
 
 
+## v0.2.0 (2026-05-23)
+
+### Features
+
+- Update version to 0.5.0 and refactor task backend to pool
+  ([`fc30586`](https://github.com/KilianSen/pyWorkflowy/commit/fc305866c588b2978620f6110374485080a7df9c))
+
+- Update version to 0.5.0 and refactor task backend to pool
+  ([`27a0230`](https://github.com/KilianSen/pyWorkflowy/commit/27a0230356e323bf3f9697fde376f32ff2511553))
+
+- Update version to 0.5.0 and refactor task backend to pool
+  ([`1ce9121`](https://github.com/KilianSen/pyWorkflowy/commit/1ce912150ec42b9bf2737b5a1b30b123ac92505d))
+
+
 ## v0.1.0 (2026-05-23)
 
 ### Chores

@@ -1,6 +1,6 @@
 [project]
 name = "pyworkflowy"
-version = "0.5.0"
+version = "0.2.0"
 description = "A full workflow engine for async/parallelized Python tasks."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -27,6 +27,7 @@ cron = []
 [project.urls]
 Homepage = "https://github.com/kiliansen/pyWorkflowy"
 Issues = "https://github.com/kiliansen/pyWorkflowy/issues"
+
 
 
 
@@ -111,6 +112,7 @@ upload_to_vcs_release = true
 
 [tool.semantic_release.changelog]
 exclude_commit_patterns = ["^chore\\(release\\):"]
+
 
 
 [dependency-groups]
