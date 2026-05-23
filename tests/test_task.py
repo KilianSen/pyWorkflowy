@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from pytasky import Task, TaskRunner, TaskStatus, current_task, task
+from pyworkflowy import Task, TaskRunner, TaskStatus, current_task, task
 
 
 def test_bare_decorator() -> None:

@@ -2,7 +2,7 @@
 
 These pieces are deliberately decoupled from execution — they describe *what*
 a task is and *what a submitted task looks like*, leaving the actual scheduling
-to :mod:`pytasky._runner` and the backend code in :mod:`pytasky._backends`.
+to :mod:`pyworkflowy._runner` and the backend code in :mod:`pyworkflowy._backends`.
 """
 
 from __future__ import annotations
@@ -17,10 +17,10 @@ from enum import StrEnum
 from inspect import iscoroutinefunction
 from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
 
-from pytasky.exceptions import TaskCancelledError, TaskError
+from pyworkflowy.exceptions import TaskCancelledError, TaskError
 
 if TYPE_CHECKING:
-    from pytasky._runner import TaskRunner
+    from pyworkflowy._runner import TaskRunner
 
 __all__ = [
     "Backend",
@@ -118,7 +118,7 @@ class TaskContext:
     cancel_event: threading.Event
 
 
-_current_task: ContextVar[TaskContext | None] = ContextVar("pytasky_current_task", default=None)
+_current_task: ContextVar[TaskContext | None] = ContextVar("pyworkflowy_current_task", default=None)
 
 
 def current_task() -> TaskContext | None:
@@ -185,7 +185,7 @@ class Task(Generic[R]):
         decides what happens if any of them ended in a non-``COMPLETED``
         state.
         """
-        from pytasky._runner import get_current_runner  # local import to break cycle
+        from pyworkflowy._runner import get_current_runner  # local import to break cycle
 
         active = runner or get_current_runner()
         if active is None:

@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from pytasky import Task, TaskBase, TaskRunner, TaskStatus
+from pyworkflowy import Task, TaskBase, TaskRunner, TaskStatus
 
 
 def test_subclass_produces_task() -> None:

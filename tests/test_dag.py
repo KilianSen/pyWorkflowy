@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from pytasky import TaskRunner, TaskStatus, task
-from pytasky.exceptions import CycleError, DependencyFailedError
+from pyworkflowy import TaskRunner, TaskStatus, task
+from pyworkflowy.exceptions import CycleError, DependencyFailedError
 
 
 def test_dependencies_run_in_order() -> None:
@@ -50,7 +50,7 @@ def test_cycle_detected_on_submit() -> None:
         # poking the dag check. Instead test that the immediate
         # case still raises at construction time. Build the cycle by mocking.
         # Verify CycleError import is real and findable.
-        from pytasky._dag import find_cycle
+        from pyworkflowy._dag import find_cycle
 
         cycle = find_cycle(
             h_a.id,
@@ -62,7 +62,7 @@ def test_cycle_detected_on_submit() -> None:
 
 
 def test_topo_order_raises_on_cycle() -> None:
-    from pytasky._dag import topo_order
+    from pyworkflowy._dag import topo_order
 
     with pytest.raises(CycleError):
         topo_order({"a": ("b",), "b": ("a",)})

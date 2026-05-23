@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from pytasky import TaskRunner, task
-from pytasky.schedule import Scheduler, parse_cron
+from pyworkflowy import TaskRunner, task
+from pyworkflowy.schedule import Scheduler, parse_cron
 
 
 def test_parse_cron_basic() -> None:
@@ -152,7 +152,7 @@ def test_scheduler_with_runner_context() -> None:
         sched.every(0.01).do(f)
         time.sleep(0.05)
         # Use ambient runner since runner context is active
-        from pytasky._runner import _bind_runner
+        from pyworkflowy._runner import _bind_runner
         with _bind_runner(runner):
             fired = sched.tick()
         assert len(fired) == 1

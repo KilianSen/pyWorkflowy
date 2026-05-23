@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 
-from pytasky.exceptions import CycleError
+from pyworkflowy.exceptions import CycleError
 
 __all__ = ["check_no_cycle", "find_cycle", "topo_order"]
 
@@ -74,7 +74,7 @@ def check_no_cycle(
     *,
     name_lookup: Mapping[str, str] | None = None,
 ) -> None:
-    """Raise :class:`pytasky.CycleError` if inserting ``new_id`` would create a cycle.
+    """Raise :class:`pyworkflowy.CycleError` if inserting ``new_id`` would create a cycle.
 
     Names from ``name_lookup`` (id → task-name) are used in the error message
     when available so the cycle path is human-readable.
@@ -94,7 +94,7 @@ def check_no_cycle(
 def topo_order(deps: Mapping[str, Iterable[str]]) -> list[str]:
     """Return a topological ordering of ``deps`` (Kahn's algorithm).
 
-    Raises :class:`pytasky.CycleError` if the graph is not a DAG. Used as a
+    Raises :class:`pyworkflowy.CycleError` if the graph is not a DAG. Used as a
     defensive check at run start, after the per-submit checks have already
     rejected cycles individually.
     """

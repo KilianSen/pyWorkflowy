@@ -36,7 +36,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
-from pytasky.exceptions import CheckpointError
+from pyworkflowy.exceptions import CheckpointError
 
 __all__ = [
     "Checkpointer",
@@ -64,7 +64,7 @@ class Checkpointer(ABC):
 
 
 def ensure_jsonable(value: Any, *, where: str) -> None:
-    """Raise :class:`pytasky.CheckpointError` if ``value`` can't survive a JSON round-trip.
+    """Raise :class:`pyworkflowy.CheckpointError` if ``value`` can't survive a JSON round-trip.
 
     Called at submit time when a JSON checkpointer is configured — fail fast
     so users see the error at the offending submission, not when the runner
@@ -84,7 +84,7 @@ def ensure_jsonable(value: Any, *, where: str) -> None:
 def _atomic_write_bytes(path: Path, data: bytes) -> None:
     """Write ``data`` to ``path`` via a temp file + rename, for crash safety."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".pytasky-", suffix=".tmp")
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".pyworkflowy-", suffix=".tmp")
     tmp_path = Path(tmp_name)
     try:
         with os.fdopen(fd, "wb") as f:

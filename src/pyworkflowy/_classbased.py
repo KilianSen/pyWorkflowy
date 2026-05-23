@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pytasky._core import (
+from pyworkflowy._core import (
     Backend,
     Backoff,
     DepFailurePolicy,
@@ -36,7 +36,7 @@ class TaskBase:
     (``name``, ``backend``, ``retries``, ``timeout``, ``backoff``,
     ``backoff_base``, ``backoff_max``, ``retry_on``, ``on_dep_failure``)
     configure the task. Instantiating returns a fully configured
-    :class:`pytasky.Task` — the instance is *the* task, not a wrapper around
+    :class:`pyworkflowy.Task` — the instance is *the* task, not a wrapper around
     one::
 
         class FetchUser(TaskBase):

@@ -1,4 +1,4 @@
-"""Cron-like scheduling for pyTasky tasks.
+"""Cron-like scheduling for pyWorkflowy tasks.
 
 Three scheduling forms:
 
@@ -24,8 +24,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
-from pytasky._core import Task, TaskHandle
-from pytasky._runner import TaskRunner, get_current_runner
+from pyworkflowy._core import Task, TaskHandle
+from pyworkflowy._runner import TaskRunner, get_current_runner
 
 __all__ = [
     "CronExpression",
@@ -352,7 +352,7 @@ class Scheduler:
             self._started = True
             self._stop_event.clear()
         self._thread = threading.Thread(
-            target=self._run_loop, name="pytasky-scheduler", daemon=True
+            target=self._run_loop, name="pyworkflowy-scheduler", daemon=True
         )
         self._thread.start()
 
@@ -398,8 +398,8 @@ class Scheduler:
                 # log and continue. Tasks that *fired* surface failures via
                 # their handles; the scheduler itself must keep ticking.
                 import logging
-                logging.getLogger("pytasky").exception(
-                    "pytasky: scheduler tick raised; continuing"
+                logging.getLogger("pyworkflowy").exception(
+                    "pyworkflowy: scheduler tick raised; continuing"
                 )
             self._stop_event.wait(self._tick_seconds)
 
@@ -414,8 +414,8 @@ class Scheduler:
                 self.tick()
             except Exception:
                 import logging
-                logging.getLogger("pytasky").exception(
-                    "pytasky: scheduler tick raised; continuing"
+                logging.getLogger("pyworkflowy").exception(
+                    "pyworkflowy: scheduler tick raised; continuing"
                 )
             try:
                 await asyncio.wait_for(

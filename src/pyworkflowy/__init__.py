@@ -1,9 +1,9 @@
-"""pyTasky — a full workflow engine for async/parallelized Python tasks."""
+"""pyWorkflowy — a full workflow engine for async/parallelized Python tasks."""
 
 from __future__ import annotations
 
-from pytasky._classbased import TaskBase
-from pytasky._core import (
+from pyworkflowy._classbased import TaskBase
+from pyworkflowy._core import (
     Backend,
     Backoff,
     DepFailurePolicy,
@@ -15,9 +15,9 @@ from pytasky._core import (
     current_task,
     task,
 )
-from pytasky._persistence import Checkpointer, JSONCheckpointer, PickleCheckpointer
-from pytasky._runner import TaskRunner, get_current_runner
-from pytasky.exceptions import (
+from pyworkflowy._persistence import Checkpointer, JSONCheckpointer, PickleCheckpointer
+from pyworkflowy._runner import TaskRunner, get_current_runner
+from pyworkflowy.exceptions import (
     CheckpointError,
     CycleError,
     DependencyFailedError,

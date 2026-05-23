@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from pytasky import (
+from pyworkflowy import (
     TaskRunner,
     TaskStatus,
     get_current_runner,
@@ -102,7 +102,7 @@ def test_on_task_error_log(caplog: pytest.LogCaptureFixture) -> None:
 
     with TaskRunner(on_task_error="log") as runner:
         h = runner.submit(boom)
-        with caplog.at_level("ERROR", logger="pytasky"):
+        with caplog.at_level("ERROR", logger="pyworkflowy"):
             runner.run()
     assert h.status == TaskStatus.FAILED
     assert "failed" in caplog.text.lower()

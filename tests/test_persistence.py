@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from pytasky import (
+from pyworkflowy import (
     Checkpointer,
     JSONCheckpointer,
     PickleCheckpointer,
@@ -13,7 +13,7 @@ from pytasky import (
     TaskStatus,
     task,
 )
-from pytasky.exceptions import CheckpointError
+from pyworkflowy.exceptions import CheckpointError
 
 
 def test_json_checkpointer_writes_state(tmp_path: Path) -> None:

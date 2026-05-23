@@ -5,8 +5,8 @@ import time
 
 import pytest
 
-from pytasky import TaskRunner, TaskStatus, task
-from pytasky.exceptions import TaskTimeoutError
+from pyworkflowy import TaskRunner, TaskStatus, task
+from pyworkflowy.exceptions import TaskTimeoutError
 
 
 async def test_async_timeout_fires() -> None:

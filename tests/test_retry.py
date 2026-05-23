@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from pytasky import TaskRunner, TaskStatus, task
-from pytasky.exceptions import RetryExhaustedError
+from pyworkflowy import TaskRunner, TaskStatus, task
+from pyworkflowy.exceptions import RetryExhaustedError
 
 
 def test_retry_eventually_succeeds() -> None:
@@ -135,8 +135,8 @@ def test_exponential_backoff_delays(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_backoff_max_caps() -> None:
-    from pytasky._core import _build_task
-    from pytasky._runner import _compute_backoff
+    from pyworkflowy._core import _build_task
+    from pyworkflowy._runner import _compute_backoff
 
     t = _build_task(
         lambda: 1,
@@ -155,8 +155,8 @@ def test_backoff_max_caps() -> None:
 
 
 def test_backoff_none() -> None:
-    from pytasky._core import _build_task
-    from pytasky._runner import _compute_backoff
+    from pyworkflowy._core import _build_task
+    from pyworkflowy._runner import _compute_backoff
 
     t = _build_task(
         lambda: 1,

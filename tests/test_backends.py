@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from pytasky import TaskRunner, TaskStatus, current_task, task
+from pyworkflowy import TaskRunner, TaskStatus, current_task, task
 from tests._helpers import add, boom, slow_square, square  # type: ignore[import-not-found]
 
 

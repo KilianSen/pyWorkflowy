@@ -4,7 +4,7 @@ import asyncio
 import threading
 import time
 
-from pytasky import TaskRunner, TaskStatus, current_task, task
+from pyworkflowy import TaskRunner, TaskStatus, current_task, task
 
 
 async def test_async_task_cancelled_before_run() -> None:

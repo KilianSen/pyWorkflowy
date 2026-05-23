@@ -25,8 +25,8 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Literal
 
-from pytasky._backends import BackendExecutor, asyncio_execute, build_backend
-from pytasky._core import (
+from pyworkflowy._backends import BackendExecutor, asyncio_execute, build_backend
+from pyworkflowy._core import (
     Backend,
     Task,
     TaskContext,
@@ -37,14 +37,14 @@ from pytasky._core import (
     _set_current_task,
     _wallclock,
 )
-from pytasky._dag import check_no_cycle
-from pytasky._persistence import (
+from pyworkflowy._dag import check_no_cycle
+from pyworkflowy._persistence import (
     Checkpointer,
     JSONCheckpointer,
     PickleCheckpointer,
     ensure_jsonable,
 )
-from pytasky.exceptions import (
+from pyworkflowy.exceptions import (
     CycleError,
     DependencyFailedError,
     RetryExhaustedError,
@@ -57,9 +57,11 @@ __all__ = ["TaskRunner", "get_current_runner"]
 
 OnTaskError = Literal["raise", "log", "continue"]
 
-_logger = logging.getLogger("pytasky")
+_logger = logging.getLogger("pyworkflowy")
 
-_current_runner: ContextVar[TaskRunner | None] = ContextVar("pytasky_current_runner", default=None)
+_current_runner: ContextVar[TaskRunner | None] = ContextVar(
+    "pyworkflowy_current_runner", default=None
+)
 
 
 def get_current_runner() -> TaskRunner | None:
@@ -190,10 +192,10 @@ class TaskRunner:
         Plain callables are wrapped with default config — equivalent to
         ``@task(fn)``. ``depends_on`` lists already-submitted handles whose
         completion gates this task's readiness. Raises
-        :class:`pytasky.CycleError` immediately if the new edge would close
+        :class:`pyworkflowy.CycleError` immediately if the new edge would close
         a cycle.
         """
-        from pytasky._core import _build_task  # local to avoid circular import
+        from pyworkflowy._core import _build_task  # local to avoid circular import
 
         if isinstance(target, Task):
             task_obj: Task[Any] = target
@@ -281,7 +283,7 @@ class TaskRunner:
             # Defensive cycle check across the whole graph (per-submit checks already
             # covered each insertion, but re-check in case state was prepped via resume).
             deps_map = {hid: tuple(d.id for d in h.depends_on) for hid, h in self._handles.items()}
-            from pytasky._dag import topo_order
+            from pyworkflowy._dag import topo_order
 
             topo_order(deps_map)
             pending_ids = [
@@ -330,7 +332,7 @@ class TaskRunner:
                         continue
                     # readiness == "go"
                     handle._set_status(TaskStatus.READY)
-                    aiotask = asyncio.create_task(_runner_for(handle), name=f"pytasky:{hid}")
+                    aiotask = asyncio.create_task(_runner_for(handle), name=f"pyworkflowy:{hid}")
                     running[hid] = aiotask
                     progress = True
 
@@ -414,7 +416,7 @@ class TaskRunner:
             # Defer raising to the orchestrator gather; record on handle.
             pass
         elif self._on_task_error == "log":
-            _logger.error("pytasky: %s", err)
+            _logger.error("pyworkflowy: %s", err)
         self._maybe_checkpoint()
 
     async def _execute_handle(self, handle: TaskHandle[Any]) -> None:
@@ -542,7 +544,7 @@ class TaskRunner:
             raise wrapped_err
         if self._on_task_error == "log":
             _logger.error(
-                "pytasky: task %r failed after %d attempt(s): %r",
+                "pyworkflowy: task %r failed after %d attempt(s): %r",
                 task_obj.name,
                 attempts,
                 wrapped_err,
@@ -659,7 +661,7 @@ class TaskRunner:
         try:
             self._checkpointer.save(self._dump_state())
         except Exception as exc:
-            _logger.error("pytasky: checkpoint failed: %r", exc)
+            _logger.error("pyworkflowy: checkpoint failed: %r", exc)
 
     def _dump_state(self) -> dict[str, Any]:
         with self._lock:

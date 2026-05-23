@@ -1,4 +1,4 @@
-"""Exceptions raised by pyTasky's runner, backends, scheduler, and persistence layer."""
+"""Exceptions raised by pyWorkflowy's runner, backends, scheduler, and persistence layer."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ __all__ = [
 
 
 class TaskError(Exception):
-    """Base class for every pyTasky-raised exception.
+    """Base class for every pyWorkflowy-raised exception.
 
     Catch this if you want a single ``except`` clause for everything the
     runner, scheduler, or persistence layer can throw — narrower subclasses
@@ -81,7 +81,7 @@ class RetryExhaustedError(TaskError):
 
 
 class CheckpointError(TaskError):
-    """Raised by a :class:`pytasky.Checkpointer` when state I/O fails.
+    """Raised by a :class:`pyworkflowy.Checkpointer` when state I/O fails.
 
     Wrapping read/write failures lets resume code distinguish a corrupt or
     missing checkpoint from genuine task failures.

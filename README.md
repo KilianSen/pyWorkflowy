@@ -1,15 +1,15 @@
-# pyTasky
+# pyWorkflowy
 
 A full workflow engine for async/parallelized Python tasks. Tasks, DAGs, retries, timeouts, three execution backends, persistence/resume, and a cron-like scheduler — all in one library with zero runtime dependencies.
 
 ## Install
 
 ```bash
-pip install pytasky
+pip install pyworkflowy
 ```
 or
 ```bash
-uv add pytasky
+uv add pyworkflowy
 ```
 
 Core has no runtime dependencies. Process-pool support, threading, and asyncio are all stdlib.
@@ -21,7 +21,7 @@ Core has no runtime dependencies. Process-pool support, threading, and asyncio a
 `@task` is the simplest entry point. Bare or parameterised, exactly like `@hook` in pyHooky:
 
 ```python
-from pytasky import task, TaskRunner
+from pyworkflowy import task, TaskRunner
 
 @task
 def square(x: int) -> int:
@@ -51,7 +51,7 @@ The task name is auto-derived from `module.qualname` if you don't pass one. Lamb
 When configuration-as-class reads better than configuration-as-kwargs, subclass `TaskBase`:
 
 ```python
-from pytasky import TaskBase
+from pyworkflowy import TaskBase
 
 class FetchUser(TaskBase):
     name = "fetch-user"
@@ -66,7 +66,7 @@ fetch_user = FetchUser()
 handle = fetch_user.submit(42)
 ```
 
-Instantiating `FetchUser()` returns a `Task` — the same type the decorator produces. `run` may be `def` or `async def`; pyTasky auto-detects.
+Instantiating `FetchUser()` returns a `Task` — the same type the decorator produces. `run` may be `def` or `async def`; pyWorkflowy auto-detects.
 
 > `TaskBase` constructors take no arguments — class-level attributes configure the *task*; runtime values are passed to `submit(*args, **kwargs)` and forwarded to `run`.
 
@@ -138,7 +138,7 @@ def fetch(url): ...
 Cancellation is per-handle: `handle.cancel()` requests stop. Cooperative for asyncio (CancelledError at the next await), cooperative for threads (your body must check `current_task().cancel_event`), best-effort for processes (the future is cancelled if not yet scheduled).
 
 ```python
-from pytasky import current_task
+from pyworkflowy import current_task
 
 @task(backend="thread")
 def long_loop(n):
@@ -168,7 +168,7 @@ runner = TaskRunner(
 | Value      | Behaviour                                                         |
 |------------|-------------------------------------------------------------------|
 | `"raise"`  | The first failing task's exception aborts the runner. *(default)* |
-| `"log"`    | Failures logged via `logging.getLogger("pytasky")`; run continues. |
+| `"log"`    | Failures logged via `logging.getLogger("pyworkflowy")`; run continues. |
 | `"continue"` | Failures stored on handles; no log, no raise.                   |
 
 Use as a context manager so the executor pools are torn down cleanly:
@@ -212,8 +212,8 @@ Unserialisable args raise `CheckpointError` at *submit* time so you see the erro
 ## Scheduling
 
 ```python
-from pytasky import TaskRunner, task
-from pytasky.schedule import Scheduler
+from pyworkflowy import TaskRunner, task
+from pyworkflowy.schedule import Scheduler
 
 @task
 def cleanup():
@@ -278,7 +278,7 @@ Handles are awaitable; awaiting yields the value or raises the failure. Sync han
 
 | Exception                | Raised when                                                       |
 |--------------------------|-------------------------------------------------------------------|
-| `TaskError`              | Base class. Catch this to swallow any pyTasky-raised error.       |
+| `TaskError`              | Base class. Catch this to swallow any pyWorkflowy-raised error.       |
 | `TaskTimeoutError`       | A task exceeds its `timeout=` budget. **Not retried**.            |
 | `TaskCancelledError`     | A task was cancelled via `handle.cancel()` / `runner.cancel_all()`. |
 | `CycleError`             | A submission would close a cycle in the dependency graph.         |
@@ -290,7 +290,7 @@ Inside a task body, you can read `current_task()` for the current `TaskContext` 
 
 ## Threads / Multiprocessing notes
 
-- The thread pool is created lazily on first use, shut down when the runner is shut down. `current_task()` *does* work in the thread backend because pyTasky binds the contextvar on entry.
+- The thread pool is created lazily on first use, shut down when the runner is shut down. `current_task()` *does* work in the thread backend because pyWorkflowy binds the contextvar on entry.
 - The process backend's workers run in **separate interpreters** — module-level state is reimported, `current_task()` returns `None`, and the function reference is serialised via pickle. Top-level functions only; no lambdas, no nested defs.
 - On Windows (and on Python 3.14+ generally), the default start method is `spawn` — the same caveat: every worker re-imports your code.
 

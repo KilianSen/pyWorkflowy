@@ -3,7 +3,7 @@
 Each backend implements :meth:`Backend.execute` which takes a task body and
 returns its value, honoring the runner-level concerns the caller has already
 arranged (cancellation flag, contextvars). Retries and timeouts are layered
-*on top* of these backends by :mod:`pytasky._runner` — backends only run a
+*on top* of these backends by :mod:`pyworkflowy._runner` — backends only run a
 single attempt.
 """
 
@@ -16,10 +16,10 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from inspect import iscoroutinefunction
 from typing import TYPE_CHECKING, Any
 
-from pytasky.exceptions import TaskCancelledError, TaskTimeoutError
+from pyworkflowy.exceptions import TaskCancelledError, TaskTimeoutError
 
 if TYPE_CHECKING:
-    from pytasky._core import TaskContext
+    from pyworkflowy._core import TaskContext
 
 __all__ = [
     "BackendExecutor",
@@ -73,7 +73,9 @@ class ThreadBackend(BackendExecutor):
     name = "thread"
 
     def __init__(self, max_workers: int) -> None:
-        self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="pytasky")
+        self._executor = ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="pyworkflowy"
+        )
 
     def execute(
         self,
