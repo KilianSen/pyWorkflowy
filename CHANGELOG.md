@@ -1,6 +1,14 @@
 # CHANGELOG
 
 
+## v0.3.0 (2026-05-24)
+
+### Features
+
+- Update version to 0.6.0 and enhance task runner with serve functionality
+  ([`061d144`](https://github.com/KilianSen/pyWorkflowy/commit/061d1446e1cf50f0ceb13379945501da17c01728))
+
+
 ## v0.2.0 (2026-05-23)
 
 ### Features
