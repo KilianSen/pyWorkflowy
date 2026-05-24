@@ -37,15 +37,22 @@ The ABC provides two surfaces:
 
 * **Snapshot mode** (``save``/``load``) writes the entire state dictionary in
   one shot. Default backends — :class:`JSONCheckpointer`, :class:`PickleCheckpointer`
-  — are snapshot-based.
+  — are snapshot-based. ``load`` is the bootstrap path used by
+  :meth:`pyworkflowy.TaskRunner.resume`.
 * **Row-grained mode** (``save_handle``/``delete_handle``/``query``) updates a
   single handle's row. Default implementations cascade to ``save`` (load,
-  mutate, write) so existing subclasses keep working. SQL-backed implementations
-  should override these for efficient UPSERT/DELETE/SELECT.
+  mutate, write) so snapshot-only subclasses keep working. SQL-backed
+  implementations should override these for efficient UPSERT/DELETE/SELECT.
 
-The runner prefers row-grained calls for progress updates and status
-transitions; consumers that only override ``save``/``load`` still work, they
-just pay a whole-state-rewrite per change.
+**Contract:** the runner calls :meth:`Checkpointer.save_handle` on **every**
+state transition of a single handle — including transient ones (``READY``,
+``RUNNING``, ``RETRYING``, ``retry_at`` set/cleared), progress updates
+(throttled), and the terminal transition. :meth:`Checkpointer.save` is *not*
+called by the runner during normal execution; it is reserved for the default
+``save_handle`` cascade and for whole-state operations a caller initiates
+explicitly. Row-grained backends that override ``save_handle`` natively
+(one UPSERT per call) can leave ``save`` as a thin "write everything"
+fallback — the runner will not call it behind your back.
 """
 
 from __future__ import annotations
@@ -78,6 +85,12 @@ class Checkpointer(ABC):
     methods (:meth:`save_handle`, :meth:`delete_handle`, :meth:`query`) have
     default implementations that cascade through :meth:`save`/:meth:`load`,
     so a minimal subclass only needs to implement the two abstract methods.
+
+    The runner emits one :meth:`save_handle` call per status transition (and
+    per throttled progress update). SQL-backed implementations should override
+    :meth:`save_handle` with an UPSERT — :meth:`save` will not be called by
+    the runner during normal execution, so there is no need to keep the two
+    paths in sync.
 
     Backends must be safe to call from a single writer (the runner) —
     concurrent writers are not supported by default. SQL-backed implementations

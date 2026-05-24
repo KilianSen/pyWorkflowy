@@ -132,6 +132,7 @@ class TaskRunner:
         "_lock",
         "_loop",
         "_max_workers",
+        "_new_work_event",
         "_on_task_error",
         "_orphaned",
         "_pool_executors",
@@ -142,6 +143,7 @@ class TaskRunner:
         "_progress_throttle_seconds",
         "_resumed_results",
         "_shutdown",
+        "_stop_event",
         "_submission_order",
     )
 
@@ -193,6 +195,11 @@ class TaskRunner:
         self._progress_throttle_delta = 0.02
         self._shutdown = False
         self._loop: asyncio.AbstractEventLoop | None = None
+        # Lazily created on the runner's loop at arun/aserve startup. They
+        # cannot be eagerly constructed here because asyncio.Event binds to
+        # the running loop at instantiation time.
+        self._new_work_event: asyncio.Event | None = None
+        self._stop_event: asyncio.Event | None = None
         self._resumed_results: dict[str, dict[str, Any]] = {}
         # Entries from a prior checkpoint that were not terminal (status RUNNING,
         # RETRYING, PENDING, READY) — orphans the caller may want to re-submit.
@@ -370,7 +377,24 @@ class TaskRunner:
             resumed = self._resumed_results.pop(handle_id, None)
             if resumed is not None:
                 self._prime_from_resume(handle, resumed)
+        # Wake an idle serve loop so it picks up the new handle. Safe to call
+        # cross-thread because we schedule the set onto the runner's own loop.
+        self._wake_loop()
         return handle
+
+    def _wake_loop(self) -> None:
+        """Signal the dispatch loop that new work was submitted.
+
+        No-op if no loop is bound (e.g. before :meth:`arun`/:meth:`aserve`
+        starts) or the loop is already shutting down. Thread-safe — uses
+        ``call_soon_threadsafe`` so this can fire from a FastAPI handler.
+        """
+        loop = self._loop
+        event = self._new_work_event
+        if loop is None or event is None:
+            return
+        with suppress(RuntimeError):
+            loop.call_soon_threadsafe(event.set)
 
     def _next_handle_id(self, name: str) -> str:
         return f"{name}#{uuid.uuid4().hex[:12]}"
@@ -382,7 +406,10 @@ class TaskRunner:
         return asyncio.run(self.arun())
 
     async def arun(self) -> dict[str, TaskResult[Any]]:
-        """Async variant of :meth:`run`. Use this when you already have an event loop."""
+        """Async variant of :meth:`run`. One-shot — returns when all currently
+        submitted tasks reach a terminal status. Use :meth:`aserve` for a
+        long-running daemon that picks up new submissions while running.
+        """
         with self._lock:
             if self._shutdown:
                 raise RuntimeError("Cannot run a runner that has been shut down.")
@@ -393,27 +420,121 @@ class TaskRunner:
 
             topo_order(deps_map)
             pending_ids = [hid for hid, h in self._handles.items() if not h.done()]
-        self._loop = asyncio.get_running_loop()
+        self._bind_loop_events()
         with _bind_runner(self):
-            await self._run_pending(pending_ids)
+            await self._run_pending(pending_ids, serve_mode=False)
         return self.results()
 
-    async def _run_pending(self, pending_ids: list[str]) -> None:
+    async def aserve(self) -> None:
+        """Run the dispatch loop continuously until :meth:`stop` is called.
+
+        Unlike :meth:`arun`, this does *not* exit when the in-flight queue
+        drains — it awaits new submissions (from any thread, via
+        :meth:`submit` or :class:`Scheduler` / :class:`EventSource`) and
+        keeps dispatching. Individual task failures are logged and consumed
+        by the loop (use :attr:`on_task_error` to control per-task behaviour
+        and ``runner.handles()`` / ``runner.results()`` to inspect outcomes).
+
+        Graceful shutdown: :meth:`stop` lets in-flight tasks finish before
+        :meth:`aserve` returns. Hard shutdown: cancel the awaiting task /
+        coroutine — pending work is cancelled mid-flight via the existing
+        cooperative cancellation machinery.
+        """
+        with self._lock:
+            if self._shutdown:
+                raise RuntimeError("Cannot serve a runner that has been shut down.")
+            deps_map = {hid: tuple(d.id for d in h.depends_on) for hid, h in self._handles.items()}
+            from pyworkflowy._dag import topo_order
+
+            topo_order(deps_map)
+            pending_ids = [hid for hid, h in self._handles.items() if not h.done()]
+        self._bind_loop_events()
+        with _bind_runner(self):
+            await self._run_pending(pending_ids, serve_mode=True)
+
+    def serve(self) -> None:
+        """Sync wrapper around :meth:`aserve`. Blocks until :meth:`stop` is called."""
+        asyncio.run(self.aserve())
+
+    def stop(self) -> None:
+        """Request a graceful stop of the serve loop.
+
+        Safe to call from any thread (a FastAPI request handler, a signal
+        handler, etc.). In-flight tasks finish before :meth:`aserve` returns;
+        no new submissions are dispatched after :meth:`stop` fires. No-op if
+        no serve loop is active.
+        """
+        loop = self._loop
+        event = self._stop_event
+        if loop is None or event is None:
+            return
+        with suppress(RuntimeError):
+            loop.call_soon_threadsafe(event.set)
+
+    def _bind_loop_events(self) -> None:
+        """Bind the runner to the currently running loop and refresh signal events."""
+        self._loop = asyncio.get_running_loop()
+        # Fresh events each entry — a re-run after the previous loop closed
+        # leaves dangling Events that are tied to the dead loop.
+        self._new_work_event = asyncio.Event()
+        self._stop_event = asyncio.Event()
+
+    async def _wait_for_new_work_or_stop(self) -> str:
+        """Block until new work is submitted or stop is requested.
+
+        Returns ``"stop"`` if :meth:`stop` fired, ``"new_work"`` otherwise.
+        Caller must clear ``_new_work_event`` before processing new work.
+        """
+        assert self._new_work_event is not None and self._stop_event is not None
+        new_work_task = asyncio.create_task(
+            self._new_work_event.wait(), name="pyworkflowy:wait-new"
+        )
+        stop_task = asyncio.create_task(self._stop_event.wait(), name="pyworkflowy:wait-stop")
+        try:
+            _, pending = await asyncio.wait(
+                (new_work_task, stop_task),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for t in pending:
+                t.cancel()
+            return "stop" if stop_task.done() and not stop_task.cancelled() else "new_work"
+        finally:
+            for t in (new_work_task, stop_task):
+                if not t.done():
+                    t.cancel()
+
+    async def _run_pending(self, pending_ids: list[str], serve_mode: bool = False) -> None:
         # Map of id -> asyncio.Task once started, so cancel can interrupt them.
         running: dict[str, asyncio.Task[None]] = {}
-        completed_event = asyncio.Event()
-        completed_event.set()  # initial wakeup so the loop checks readiness once
 
         async def _runner_for(handle: TaskHandle[Any]) -> None:
-            try:
-                await self._execute_handle(handle)
-            finally:
-                completed_event.set()
+            await self._execute_handle(handle)
 
         remaining = set(pending_ids)
+        # Track every id we've already pulled into `remaining` so the
+        # newly-submitted rescan in serve mode only adds genuinely new ones.
+        seen_ids: set[str] = set(remaining)
+        raise_later: BaseException | None = None
         try:
-            while remaining or running:
-                # Start every newly-ready handle whose pool has spare capacity.
+            while True:
+                # 1. In serve mode, exit if stop was signalled.
+                if serve_mode and self._stop_event is not None and self._stop_event.is_set():
+                    break
+
+                # 2. In serve mode, pull in any newly-submitted handles.
+                if (
+                    serve_mode
+                    and self._new_work_event is not None
+                    and self._new_work_event.is_set()
+                ):
+                    self._new_work_event.clear()
+                    with self._lock:
+                        for hid, h in self._handles.items():
+                            if hid not in seen_ids and not h.done():
+                                remaining.add(hid)
+                                seen_ids.add(hid)
+
+                # 3. Start every newly-ready handle whose pool has spare capacity.
                 progress = False
                 for hid in list(remaining):
                     handle = self._handles[hid]
@@ -433,7 +554,7 @@ class TaskRunner:
                         progress = True
                         continue
                     # readiness == "go"
-                    handle._set_status(TaskStatus.READY)
+                    self._transition(handle, TaskStatus.READY)
                     pool_name = handle.task.pool
                     self._pool_running[pool_name] += 1
                     if not self._pools[pool_name].is_privileged(handle.source):
@@ -444,21 +565,12 @@ class TaskRunner:
                     self._aiotasks[hid] = aiotask
                     progress = True
 
-                # Wait for something to complete (or for an event that frees a slot).
-                if not running and not progress:
-                    raise TaskError(
-                        "Runner deadlocked — no tasks are running and none can progress. "
-                        "This usually means a dependency points to a handle that was never "
-                        "submitted to this runner, or every remaining task's pool is full "
-                        "while reservation rules block the rest."
-                    )
+                # 4. Decide what to wait on next.
                 if running:
-                    completed_event.clear()
                     done, _ = await asyncio.wait(
                         running.values(),
                         return_when=asyncio.FIRST_COMPLETED,
                     )
-                    raise_later: BaseException | None = None
                     for d in done:
                         for hid, t in list(running.items()):
                             if t is d:
@@ -467,12 +579,48 @@ class TaskRunner:
                                 self._aiotasks.pop(hid, None)
                                 break
                         exc = d.exception()
-                        if exc is not None and raise_later is None:
+                        if exc is None:
+                            continue
+                        if serve_mode:
+                            # Individual task failures must not bring down the
+                            # serve loop. The terminal status is already on the
+                            # handle; surface the exception via logging only.
+                            _logger.error("pyworkflowy: task raised in serve loop: %r", exc)
+                        elif raise_later is None:
                             raise_later = exc
                     if raise_later is not None:
                         raise raise_later
+                elif remaining:
+                    # We have work but couldn't make progress this iteration.
+                    if not progress:
+                        if serve_mode:
+                            # In serve mode, wait for new work that might unblock
+                            # this — typically a dep handle being submitted.
+                            reason = await self._wait_for_new_work_or_stop()
+                            if reason == "stop":
+                                break
+                        else:
+                            raise TaskError(
+                                "Runner deadlocked — no tasks are running and none can "
+                                "progress. This usually means a dependency points to a "
+                                "handle that was never submitted to this runner, or every "
+                                "remaining task's pool is full while reservation rules "
+                                "block the rest."
+                            )
+                    # If we did make progress this iteration but nothing is
+                    # running yet (only marked skipped/failed), loop again.
+                else:
+                    # Idle: no remaining, no running.
+                    if not serve_mode:
+                        break
+                    reason = await self._wait_for_new_work_or_stop()
+                    if reason == "stop":
+                        break
+            # Graceful shutdown: let any in-flight tasks finish naturally.
+            if running:
+                await asyncio.gather(*running.values(), return_exceptions=True)
         except BaseException:
-            # Cancel anything still running before propagating.
+            # Error path: cancel anything still in-flight before propagating.
             for t in running.values():
                 t.cancel()
             if running:
@@ -515,8 +663,8 @@ class TaskRunner:
             status=TaskStatus.SKIPPED,
             attempts=0,
         )
+        # Terminal — _complete routes through _on_handle_terminal → save_handle.
         handle._complete(result)
-        self._maybe_checkpoint()
 
     def _mark_dep_failed(self, handle: TaskHandle[Any]) -> None:
         failed_names = tuple(d.name for d in handle.depends_on if d.status != TaskStatus.COMPLETED)
@@ -530,13 +678,13 @@ class TaskRunner:
             error=err,
             attempts=0,
         )
+        # Terminal — _complete routes through _on_handle_terminal → save_handle.
         handle._complete(result)
         if self._on_task_error == "raise":
             # Defer raising to the orchestrator gather; record on handle.
             pass
         elif self._on_task_error == "log":
             _logger.error("pyworkflowy: %s", err)
-        self._maybe_checkpoint()
 
     async def _execute_handle(self, handle: TaskHandle[Any]) -> None:
         task_obj = handle.task
@@ -562,16 +710,15 @@ class TaskRunner:
                     finished_at=_wallclock(),
                 )
                 handle._complete(result)
-                self._maybe_checkpoint()
                 return
             while attempts < task_obj.max_attempts:
                 attempts += 1
                 ctx.attempt = attempts
                 handle._retry_at = None
                 if attempts == 1:
-                    handle._set_status(TaskStatus.RUNNING)
+                    self._transition(handle, TaskStatus.RUNNING)
                 else:
-                    handle._set_status(TaskStatus.RETRYING)
+                    self._transition(handle, TaskStatus.RETRYING)
                 try:
                     value = await self._dispatch_one(handle, ctx, pool)
                     finished = _wallclock()
@@ -584,7 +731,6 @@ class TaskRunner:
                         finished_at=finished,
                     )
                     handle._complete(result)
-                    self._maybe_checkpoint()
                     return
                 except TaskCancelledError as exc:
                     last_exc = exc
@@ -597,7 +743,6 @@ class TaskRunner:
                         finished_at=_wallclock(),
                     )
                     handle._complete(result)
-                    self._maybe_checkpoint()
                     return
                 except TaskTimeoutError as exc:
                     # Timeouts terminate the task — no retry, surface the failure.
@@ -616,7 +761,6 @@ class TaskRunner:
                             finished_at=_wallclock(),
                         )
                         handle._complete(result)
-                        self._maybe_checkpoint()
                         return
                     if not _is_retryable(exc, task_obj.retry_on):
                         break
@@ -625,7 +769,9 @@ class TaskRunner:
                     delay = _compute_backoff(task_obj, attempts)
                     if delay > 0:
                         handle._retry_at = _wallclock() + delay
-                        self._maybe_checkpoint()
+                        # retry_at just changed — persist the row so a UI can
+                        # render "retrying in Ns" without poking internals.
+                        self._persist_handle(handle)
                         try:
                             await asyncio.sleep(delay)
                         except asyncio.CancelledError:
@@ -641,7 +787,6 @@ class TaskRunner:
                                 finished_at=_wallclock(),
                             )
                             handle._complete(result)
-                            self._maybe_checkpoint()
                             return
 
             # Retries exhausted (or non-retryable exception on first attempt).
@@ -667,7 +812,6 @@ class TaskRunner:
                 finished_at=finished,
             )
             handle._complete(result)
-            self._maybe_checkpoint()
             if self._on_task_error == "raise":
                 raise wrapped_err
             if self._on_task_error == "log":
@@ -802,27 +946,49 @@ class TaskRunner:
                 backend.shutdown(wait=wait)
             self._pool_executors.clear()
 
+    # ---------- per-transition persistence ----------
+
+    def _persist_handle(self, handle: TaskHandle[Any]) -> None:
+        """Persist a single handle's current state via :meth:`Checkpointer.save_handle`.
+
+        Called on every status transition (and from the retry loop when only
+        ``retry_at`` changed). Never raises — checkpoint backends should be
+        able to fail without bringing down the runner. Updates
+        ``_last_checkpoint`` so the progress throttle treats this as a recent
+        write.
+        """
+        if self._checkpointer is None:
+            return
+        try:
+            self._checkpointer.save_handle(self._handle_to_entry(handle))
+        except Exception as exc:
+            _logger.error("pyworkflowy: save_handle failed: %r", exc)
+        self._last_checkpoint = time.monotonic()
+
+    def _transition(self, handle: TaskHandle[Any], status: TaskStatus) -> None:
+        """Set ``handle`` to ``status`` and persist the transition.
+
+        Use this for non-terminal transitions (READY, RUNNING, RETRYING).
+        Terminal transitions go through :meth:`TaskHandle._complete`, which
+        routes via :meth:`_on_handle_terminal` to ``save_handle`` already.
+        """
+        handle._set_status(status)
+        self._persist_handle(handle)
+
     # ---------- progress & terminal hooks ----------
 
     def _on_handle_terminal(self, handle: TaskHandle[Any]) -> None:
         """Called from :meth:`TaskHandle._complete` when a handle terminates.
 
         Drops the handle from the dedup index so a future submit with the
-        same key starts fresh, and flushes a final row-grained checkpoint
-        outside the throttle window so the terminal state is durable.
+        same key starts fresh, and persists the terminal row.
         """
         if handle._dedup_key is not None:
             with self._lock:
                 key = (handle.name, handle._dedup_key)
                 if self._dedup_index.get(key) is handle:
                     del self._dedup_index[key]
-        if self._checkpointer is not None:
-            entry = self._handle_to_entry(handle)
-            try:
-                self._checkpointer.save_handle(entry)
-            except Exception as exc:
-                _logger.error("pyworkflowy: terminal checkpoint failed: %r", exc)
-            self._last_checkpoint = time.monotonic()
+        self._persist_handle(handle)
 
     def _maybe_persist_progress(self, handle: TaskHandle[Any]) -> None:
         """Persist a progress update through the checkpointer, throttled.
@@ -850,18 +1016,6 @@ class TaskRunner:
             _logger.error("pyworkflowy: progress checkpoint failed: %r", exc)
 
     # ---------- checkpointing ----------
-
-    def _maybe_checkpoint(self) -> None:
-        if self._checkpointer is None:
-            return
-        now = time.monotonic()
-        if self._checkpoint_interval and (now - self._last_checkpoint) < self._checkpoint_interval:
-            return
-        self._last_checkpoint = now
-        try:
-            self._checkpointer.save(self._dump_state())
-        except Exception as exc:
-            _logger.error("pyworkflowy: checkpoint failed: %r", exc)
 
     def _handle_to_entry(self, h: TaskHandle[Any]) -> dict[str, Any]:
         """Serialise a single handle into the v2 state schema."""

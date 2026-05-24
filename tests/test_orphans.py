@@ -120,44 +120,47 @@ def test_resume_orphans_can_be_resubmitted(tmp_path: Path) -> None:
         assert completed[0].result() == 84
 
 
+class _TrackingCp(Checkpointer):
+    """Test-only Checkpointer recording every call for assertion."""
+
+    def __init__(self) -> None:
+        self.snapshot_writes = 0
+        self.row_writes: list[dict] = []
+        self.row_deletes: list[str] = []
+        self._state: dict | None = None
+
+    def save(self, state: dict) -> None:
+        self.snapshot_writes += 1
+        self._state = state
+
+    def load(self) -> dict | None:
+        return self._state
+
+    def save_handle(self, entry: dict) -> None:
+        # Snapshot the entry at call time so subsequent mutations don't
+        # backfill earlier rows under our feet.
+        self.row_writes.append(dict(entry))
+        self._state = self._state or {"version": 2, "handles": []}
+        handles = self._state["handles"]
+        for i, h in enumerate(handles):
+            if h.get("id") == entry["id"]:
+                handles[i] = entry
+                return
+        handles.append(entry)
+
+    def delete_handle(self, handle_id: str) -> None:
+        self.row_deletes.append(handle_id)
+
+
 def test_in_memory_row_checkpointer_save_handle_called() -> None:
     """A row-grained checkpointer sees one save_handle call per transition."""
-
-    class RowCp(Checkpointer):
-        def __init__(self) -> None:
-            self.snapshot_writes = 0
-            self.row_writes: list[dict] = []
-            self.row_deletes: list[str] = []
-            self._state: dict | None = None
-
-        def save(self, state: dict) -> None:
-            self.snapshot_writes += 1
-            self._state = state
-
-        def load(self) -> dict | None:
-            return self._state
-
-        def save_handle(self, entry: dict) -> None:
-            self.row_writes.append(entry)
-            # Maintain in-memory state too so resume works.
-            self._state = self._state or {"version": 2, "handles": []}
-            handles = self._state["handles"]
-            for i, h in enumerate(handles):
-                if h.get("id") == entry["id"]:
-                    handles[i] = entry
-                    return
-            handles.append(entry)
-
-        def delete_handle(self, handle_id: str) -> None:
-            self.row_deletes.append(handle_id)
-
-    cp = RowCp()
+    cp = _TrackingCp()
 
     @task
     def f(x: int) -> int:
         return x * 2
 
-    with TaskRunner(checkpointer=cp, checkpoint_interval=0) as runner:
+    with TaskRunner(checkpointer=cp) as runner:
         runner.submit(f, 7)
         runner.run()
 
@@ -166,6 +169,69 @@ def test_in_memory_row_checkpointer_save_handle_called() -> None:
     final = cp.row_writes[-1]
     assert final["status"] == TaskStatus.COMPLETED.value
     assert final["value"] == 14
+    # Contract: save() is NOT called by the runner during normal execution.
+    assert cp.snapshot_writes == 0
+
+
+def test_status_sequence_persisted_for_retrying_task() -> None:
+    """Every intermediate status transition lands as a save_handle row."""
+    cp = _TrackingCp()
+    calls: list[int] = []
+
+    @task(retries=2, backoff="none")
+    def flaky() -> int:
+        calls.append(1)
+        if len(calls) < 3:
+            raise RuntimeError("not yet")
+        return 42
+
+    with TaskRunner(checkpointer=cp) as runner:
+        runner.submit(flaky)
+        runner.run()
+
+    statuses = [entry["status"] for entry in cp.row_writes]
+    # Must include the non-terminal transitions, not just the final state.
+    assert "ready" in statuses, statuses
+    assert "running" in statuses, statuses
+    assert "retrying" in statuses, statuses
+    assert statuses[-1] == "completed", statuses
+    # READY precedes RUNNING in the timeline.
+    assert statuses.index("ready") < statuses.index("running")
+    # No snapshot save() at any point.
+    assert cp.snapshot_writes == 0
+
+
+def test_default_checkpointer_save_handle_cascades_to_save() -> None:
+    """A snapshot-only subclass (no save_handle override) still works — the
+    default save_handle implementation in the ABC cascades to save().
+    """
+    written_states: list[dict] = []
+
+    class SnapshotOnly(Checkpointer):
+        def __init__(self) -> None:
+            self._state: dict | None = None
+
+        def save(self, state: dict) -> None:
+            written_states.append(state)
+            self._state = state
+
+        def load(self) -> dict | None:
+            return self._state
+
+    cp = SnapshotOnly()
+
+    @task
+    def f(x: int) -> int:
+        return x + 1
+
+    with TaskRunner(checkpointer=cp) as runner:
+        runner.submit(f, 1)
+        runner.run()
+
+    # save() was hit via cascade — at least once.
+    assert len(written_states) >= 1
+    final = written_states[-1]
+    assert final["handles"][-1]["status"] == TaskStatus.COMPLETED.value
 
 
 def test_query_filters_default_implementation(tmp_path: Path) -> None:
