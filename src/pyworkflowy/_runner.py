@@ -378,6 +378,16 @@ class TaskRunner:
             resumed = self._resumed_results.pop(handle_id, None)
             if resumed is not None:
                 self._prime_from_resume(handle, resumed)
+        # Persist the initial PENDING row immediately so any inspection of the
+        # checkpointer right after submit() sees the handle. Skip when resumed
+        # is not None — the handle was primed from a prior checkpoint and is
+        # already terminal; the existing checkpoint row is authoritative.
+        if self._checkpointer is not None and resumed is None:
+            try:
+                self._checkpointer.save_initial(self._handle_to_entry(handle))
+            except Exception as exc:
+                _logger.error("pyworkflowy: save_initial failed: %r", exc)
+            self._last_checkpoint = time.monotonic()
         # Wake an idle serve loop so it picks up the new handle. Safe to call
         # cross-thread because we schedule the set onto the runner's own loop.
         self._wake_loop()

@@ -245,3 +245,74 @@ def test_resume_rejects_per_row_checkpointer(tmp_path: Path) -> None:
     cp = RowOnly()
     with pytest.raises(TypeError, match="SnapshotCheckpointer"):
         TaskRunner.resume(str(tmp_path / "state.json"), checkpointer=cp)
+
+
+def test_submit_persists_pending_row_immediately(tmp_path: Path) -> None:
+    """submit() must persist a PENDING row before returning, without calling run()."""
+    cp_path = tmp_path / "x.json"
+
+    @task
+    def f(x: int) -> int:
+        return x * 2
+
+    runner = TaskRunner(checkpoint_path=str(cp_path), checkpoint_interval=0)
+    try:
+        runner.submit(f, 5)
+        # Do NOT call runner.run() — we want to verify the row is there immediately.
+        assert cp_path.exists(), "checkpoint file should exist after submit()"
+        state = json.loads(cp_path.read_text())
+        assert len(state["handles"]) == 1
+        entry = state["handles"][0]
+        assert entry["status"] == TaskStatus.PENDING.value
+        assert entry["args"] == [5]
+    finally:
+        runner.shutdown()
+
+
+def test_save_initial_cascades_to_save_handle_by_default(tmp_path: Path) -> None:
+    """save_initial() default cascades to save_handle(); runner calls it once on submit."""
+
+    class CountingCheckpointer(Checkpointer):
+        def __init__(self) -> None:
+            self.rows: dict[str, dict] = {}
+            self.save_handle_count = 0
+
+        def save_handle(self, entry: dict) -> None:
+            self.rows[entry["id"]] = dict(entry)
+            self.save_handle_count += 1
+
+        def delete_handle(self, handle_id: str) -> None:
+            self.rows.pop(handle_id, None)
+
+        def query(self, **filters):
+            results = list(self.rows.values())
+            for k, v in filters.items():
+                results = [h for h in results if h.get(k) == v]
+            return results
+
+        # save_initial is NOT overridden — it should cascade to save_handle.
+
+    cp = CountingCheckpointer()
+
+    @task
+    def g(x: int) -> int:
+        return x + 1
+
+    runner = TaskRunner(checkpointer=cp, checkpoint_interval=0)
+    try:
+        h = runner.submit(g, 10)
+        # One call from save_initial cascade before run().
+        assert cp.save_handle_count == 1, (
+            f"expected 1 save_handle call after submit(), got {cp.save_handle_count}"
+        )
+        pre_run_count = cp.save_handle_count
+        runner.run()
+        # After run(), further status transitions (READY, RUNNING, COMPLETED) each
+        # call save_handle, so the count must be strictly greater.
+        assert cp.save_handle_count > pre_run_count, (
+            "expected additional save_handle calls for status transitions during run()"
+        )
+        assert h.id in cp.rows
+        assert cp.rows[h.id]["status"] == TaskStatus.COMPLETED.value
+    finally:
+        runner.shutdown()
