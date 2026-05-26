@@ -136,9 +136,7 @@ class TaskContext:
         was never set).
         """
         if self._handle is None:
-            raise RuntimeError(
-                "TaskContext.id is only available inside a running task body."
-            )
+            raise RuntimeError("TaskContext.id is only available inside a running task body.")
         return self._handle.id
 
     def update_progress(self, fraction: float, message: str | None = None) -> None:
@@ -169,9 +167,7 @@ class TaskContext:
         its result is discarded.
         """
         if self._runner is None:
-            raise RuntimeError(
-                "TaskContext.offload is only valid inside a running task body."
-            )
+            raise RuntimeError("TaskContext.offload is only valid inside a running task body.")
         pool_obj = self._runner._pools.get(pool)
         if pool_obj is None or pool_obj.kind != "offload":
             raise ValueError(
@@ -187,14 +183,10 @@ class TaskContext:
         )
         cancel_wait = asyncio.create_task(_wait_for_cancel(self.cancel_event))
         try:
-            done, _ = await asyncio.wait(
-                (future, cancel_wait), return_when=asyncio.FIRST_COMPLETED
-            )
+            done, _ = await asyncio.wait((future, cancel_wait), return_when=asyncio.FIRST_COMPLETED)
             if future in done:
                 return future.result()
-            raise TaskCancelledError(
-                f"Task {self.name!r} was cancelled during offload"
-            )
+            raise TaskCancelledError(f"Task {self.name!r} was cancelled during offload")
         finally:
             cancel_wait.cancel()
             with contextlib.suppress(asyncio.CancelledError):

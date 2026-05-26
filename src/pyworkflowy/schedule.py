@@ -465,9 +465,7 @@ class Scheduler:
                 # reference queue handles publish-before-startup).
                 return
             try:
-                handle = runner.submit(
-                    job.task, args=job.args, payload=mapped, source="event"
-                )
+                handle = runner.submit(job.task, args=job.args, payload=mapped, source="event")
             except Exception:
                 import logging
 
@@ -547,9 +545,7 @@ class Scheduler:
         for job in jobs:
             # Distinguish cron-fired jobs from manual submits via source="cron".
             source = "cron" if job.cron is not None else "manual"
-            handle = runner.submit(
-                job.task, args=job.args, payload=job.kwargs, source=source
-            )
+            handle = runner.submit(job.task, args=job.args, payload=job.kwargs, source=source)
             job.last_handle = handle
             job.schedule_next(now)
             fired.append(handle)

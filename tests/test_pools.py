@@ -306,8 +306,10 @@ async def test_ctx_offload_propagates_exception() -> None:
     async def runs() -> str:
         ctx = current_task()
         assert ctx is not None
+
         def boom() -> None:
             raise ValueError("kaboom")
+
         try:
             await ctx.offload(boom)
         except ValueError as exc:
@@ -355,6 +357,4 @@ async def test_ctx_offload_pool_is_bounded() -> None:
     for h in handles:
         assert h.status == TaskStatus.COMPLETED
     assert max_observed <= 2, f"observed {max_observed} concurrent offloads (cap=2)"
-    assert max_observed >= 2, (
-        f"expected at least 2 concurrent offloads, observed {max_observed}"
-    )
+    assert max_observed >= 2, f"expected at least 2 concurrent offloads, observed {max_observed}"
