@@ -1,26 +1,145 @@
 # CHANGELOG
 
 
-## v0.7.0 (2026-05-26)
+## v0.4.0 (2026-05-26)
 
-### Breaking Changes
+### Bug Fixes
 
-- **`submit()` no longer takes `*args` / `**kwargs`.** Both `TaskRunner.submit(target, ...)` and `Task.submit(...)` now require keyword-only `args: tuple = ()` and `payload: Mapping[str, Any] | None = None`. Migration:
-  - `runner.submit(f, 5, dedup_key="k")` → `runner.submit(f, args=(5,), dedup_key="k")`
-  - `task.submit(book_id=7)` → `task.submit(payload={"book_id": 7})`
+- **offload**: Tighten ctx.offload accessor, exception coverage, and OffloadPool.execute guard
+  ([`db88cc0`](https://github.com/KilianSen/pyWorkflowy/commit/db88cc0d9b3c85f2b3b9e961664c180adc1e0e4f))
 
-### Features
+- OffloadPool.execute now raises NotImplementedError instead of silently running fn without
+  _thread_wrapped if the submit-time guard were ever removed. - Add OffloadPool.thread_executor() so
+  TaskContext.offload no longer reaches into the private _executor attribute. - Extract the 50ms
+  cancel-poll interval into _OFFLOAD_CANCEL_POLL_INTERVAL. - Narrow the finally-block
+  contextlib.suppress in TaskContext.offload to asyncio.CancelledError so KeyboardInterrupt /
+  SystemExit aren't swallowed. - Document the offload pool's thread cost in _default_pools. - Add
+  test for exception propagation through ctx.offload.
 
-- `TaskContext.id` — read the running handle's id without reaching into `_handle`.
-- `TaskRunner.find_active(name, dedup_key)` / `TaskRunner.has_active(name, dedup_key)` — public dedup-index lookup.
-- `Checkpointer.save_initial(entry)` — first-write hook on submit (defaults to cascading `save_handle`); SQL-backed checkpointers can override for `INSERT` semantics.
-- `TaskRunner.submit()` now persists the initial PENDING row via `save_initial` so hosts inspecting the checkpointer right after submit see the handle immediately.
-- New `Pool(kind="offload")` and `TaskContext.offload(fn, *args, **kwargs)` for routing sync C-extension chunks (Pillow, ONNX, numpy) to a runner-managed thread pool from inside async tasks. Default runners get an `"offload"` pool sized to `max_workers`. Tasks may not target an offload-kind pool with `@task(pool=...)` — those pools are call-only.
-- New `SnapshotCheckpointer(Checkpointer)` ABC: the per-row `Checkpointer` contract no longer requires `save`/`load`; only `SnapshotCheckpointer` subclasses do. `TaskRunner.resume()` now requires a `SnapshotCheckpointer`. `JSONCheckpointer` / `PickleCheckpointer` inherit from `SnapshotCheckpointer`.
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+### Code Style
+
+- Apply ruff format
+  ([`60fcdce`](https://github.com/KilianSen/pyWorkflowy/commit/60fcdce11f2cfdcef8f56fc5d3ab00361df41649))
 
 ### Documentation
 
-- `TaskHandle.cancel` docstring now spells out the cross-thread *hard* cancel for asyncio (the runner schedules `asyncio.Task.cancel()` via `call_soon_threadsafe` — implemented since 0.6.0, just under-documented).
+- Update pool listings and Checkpointer reference for 0.7.0
+  ([`e6a761b`](https://github.com/KilianSen/pyWorkflowy/commit/e6a761bcf9e32241b76e25eb304697d8d6e84bc1))
+
+- TaskRunner._default_pools now includes 'offload' pool; update docstrings - task() decorator
+  docstring: four named pools (default, thread, process, offload) - README custom checkpointer row:
+  reference SnapshotCheckpointer not Checkpointer
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+- **handle**: Clarify TaskHandle.cancel hard-cancel semantics for asyncio
+  ([`7f63972`](https://github.com/KilianSen/pyWorkflowy/commit/7f63972688fa2a3f8ce363002ccdc156b6d0552a))
+
+- **persistence**: Clarify Checkpointer vs SnapshotCheckpointer guidance
+  ([`34d0074`](https://github.com/KilianSen/pyWorkflowy/commit/34d00748a61f2584cb2f8b9ab81e59b3e10560ce))
+
+Update module docstring to distinguish per-row (Checkpointer) from whole-state / resume-capable
+  (SnapshotCheckpointer) subclassing guidance. Clarify tripwire comment in test_persistence.py to
+  note that the counter is the authoritative signal and the raise may be swallowed.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+- **submit**: Clarify payload= idiom and schedule.do forwarding
+  ([`b5f338d`](https://github.com/KilianSen/pyWorkflowy/commit/b5f338d610fb993ef5178e525601e6a87fc0dda3))
+
+Fix 1: TaskRunner.submit() now uses explicit None-check for payload parameter so an explicit empty
+  dict is properly copied instead of replaced with a fresh dict.
+
+Fix 2: Added docstring note explaining how JobBuilder.do(task, *args, **kwargs) forwards args/kwargs
+  to runner.submit() as args=tuple(...), payload=dict(...), clarifying the bridging between mutable
+  kwargs and immutable payload idiom.
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+### Features
+
+- **core**: Add TaskContext.id property
+  ([`d6a8d59`](https://github.com/KilianSen/pyWorkflowy/commit/d6a8d5977e21c1a635bc078cb28b794ea2b15ae5))
+
+Exposes the backing handle's unique id via a public property on TaskContext, with a RuntimeError
+  guard for the no-handle case. Adds a test asserting ctx.id == handle.id from inside a task body.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+- **persistence**: Split Checkpointer and SnapshotCheckpointer
+  ([`324895c`](https://github.com/KilianSen/pyWorkflowy/commit/324895cc2f96e6a809bbbeb854a5951568b057e7))
+
+Per-row Checkpointer ABC now requires save_handle/delete_handle/query and adds a save_initial hook
+  (defaulting to save_handle). save/load raise NotImplementedError on the base class.
+  SnapshotCheckpointer carries the whole-state contract and cascades the row-grained methods through
+  save/load. JSONCheckpointer and PickleCheckpointer rebase onto SnapshotCheckpointer.
+  TaskRunner.resume now rejects per-row checkpointers with TypeError, since it needs whole-state
+  load().
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+- **pools**: Add offload PoolKind and TaskContext.offload
+  ([`c359709`](https://github.com/KilianSen/pyWorkflowy/commit/c35970951554c2d2c04bd74eff1c175bcb96b4e7))
+
+Add a new pool kind "offload" for runner-managed thread-pool offload of sync C-extension chunks
+  (Pillow, ONNX, numpy) called from inside async task bodies. Offload pools are call-only: tasks may
+  not target them via @task(pool=...). Instead, an async task body invokes ctx.offload(fn, ...) to
+  run blocking work on the dedicated pool while still observing the task's cancel_event for prompt
+  cancellation.
+
+- _backends: widen PoolKind to include "offload"; add OffloadPool class; route build_pool_executor
+  for kind="offload". - _runner: add "offload" entry to default pools; reject task submissions that
+  target an offload-kind pool with a clear, actionable error; thread the runner reference into
+  TaskContext so ctx.offload can locate the pool. - _core: add TaskContext._runner field; add async
+  TaskContext.offload() method that races the offload future against a cancellation watcher;
+  cancellation is observed via a short poll on the threading.Event to avoid leaking a blocked
+  watcher thread on the happy path. - tests: cover the four behaviours — submit rejection, basic
+  offload round-trip, prompt cancellation during a long blocking call, and per-pool bounded
+  concurrency.
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>
+
+- **runner**: Add find_active/has_active dedup query API
+  ([`f8e6994`](https://github.com/KilianSen/pyWorkflowy/commit/f8e699468304aa3c306745330090719b975252dd))
+
+Expose two public methods on TaskRunner that let callers inspect the dedup index without replicating
+  internal state management.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+- **runner**: Persist initial PENDING entry on submit() via save_initial
+  ([`96ad52f`](https://github.com/KilianSen/pyWorkflowy/commit/96ad52ffc4659337e59a894ce155198a172f5a1b))
+
+Call self._checkpointer.save_initial(self._handle_to_entry(handle)) in submit() before returning so
+  any checkpointer inspection immediately after submit() sees the handle with status=pending. Skips
+  the call when resumed is not None (handle primed from a prior checkpoint; existing row is
+  authoritative). Also adds two tests in test_persistence.py: one verifying the PENDING row is
+  written without run(), one verifying the default save_initial cascade to save_handle.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+### Testing
+
+- **persistence**: Tighten save_initial cascade assertions
+  ([`1af53f9`](https://github.com/KilianSen/pyWorkflowy/commit/1af53f91164213c92deea9a00be5a4cf4976f3bd))
+
+Add save_initial_count to CountingCheckpointer, override save_initial to increment it and delegate
+  via super(), and assert both save_initial_count == 1 AND save_handle_count == 1 after submit() —
+  proving the cascade fired and cannot be bypassed by calling save_handle directly. Also convert the
+  manual try/finally shutdown in test_submit_persists_pending_row_immediately to the with-statement
+  context-manager pattern used by the rest of the file.
+
+Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
+
+
+## v0.3.0 (2026-05-24)
+
+### Features
+
+- Update version to 0.6.0 and enhance task runner with serve functionality
+  ([`061d144`](https://github.com/KilianSen/pyWorkflowy/commit/061d1446e1cf50f0ceb13379945501da17c01728))
 
 
 ## v0.2.0 (2026-05-23)
