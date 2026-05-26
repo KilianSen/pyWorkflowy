@@ -2,8 +2,10 @@
 
 Default backend is :class:`JSONCheckpointer` — JSON-only, requires args to be
 JSON-serialisable. :class:`PickleCheckpointer` is the more permissive option;
-implement :class:`Checkpointer` to plug in your own (SQLite, Redis, Postgres,
-etc.).
+For per-row backends (SQLite, Postgres with row-level UPSERT) subclass
+:class:`Checkpointer`; for whole-state snapshot backends, or per-row backends
+that also need :meth:`TaskRunner.resume` support, subclass
+:class:`SnapshotCheckpointer`.
 
 State schema (v2)::
 

@@ -204,7 +204,8 @@ def test_per_row_checkpointer_never_touches_save_or_load() -> None:
                 results = [h for h in results if h.get(k) == v]
             return results
 
-        # Tripwires: blow up if the runner reaches for snapshot APIs.
+        # Counter is the authoritative signal; the raise is informational and
+        # may be swallowed by _persist_handle's except-Exception wrapper.
         def save(self, state):
             self.save_calls += 1
             raise AssertionError("runner must not call save() on per-row backend")
