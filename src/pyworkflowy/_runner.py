@@ -87,11 +87,13 @@ def _bind_runner(runner: TaskRunner) -> Iterator[None]:
 
 
 def _default_pools(max_workers: int) -> dict[str, Pool]:
-    """Standard pool set: one asyncio pool plus thread and process pools.
+    """Standard pool set: one asyncio pool plus thread, process, and offload pools.
 
     Every kind gets a named pool so existing ``@task(pool="thread")`` and
-    ``pool="process"`` calls work without explicit ``pools=`` configuration on
-    the runner.
+    ``pool="process"`` calls — and ``ctx.offload()`` invocations — work without
+    explicit ``pools=`` configuration on the runner. Note that with defaults
+    the total OS-thread budget is roughly ``max_workers * 3`` (thread + process worker
+    + offload), since each non-asyncio pool spins up its own executor.
     """
     return {
         DEFAULT_POOL_NAME: Pool(name=DEFAULT_POOL_NAME, kind="asyncio", max_workers=max_workers),

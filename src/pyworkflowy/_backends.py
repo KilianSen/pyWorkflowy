@@ -17,7 +17,7 @@ from collections.abc import Awaitable, Callable
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from inspect import iscoroutinefunction
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from pyworkflowy.exceptions import TaskCancelledError, TaskTimeoutError
 
@@ -218,10 +218,10 @@ class OffloadPool(PoolExecutor):
     to run sync C-extension chunks (Pillow, ONNX, numpy) off the event loop
     without blocking it.
 
-    The :meth:`execute` method is implemented for symmetry with the other
-    :class:`PoolExecutor` subclasses, but the runner will never call it for
-    offload kinds — ``ctx.offload`` schedules work directly through the
-    underlying ``_executor`` via ``loop.run_in_executor``.
+    The :meth:`execute` method is intentionally a guard — the runner rejects
+    offload-kind submissions at :meth:`TaskRunner.submit` time, so this code
+    path is never reached. ``ctx.offload`` schedules work directly through
+    :meth:`thread_executor` via ``loop.run_in_executor``.
     """
 
     def __init__(self, pool: Pool) -> None:
@@ -230,6 +230,13 @@ class OffloadPool(PoolExecutor):
             max_workers=pool.max_workers,
             thread_name_prefix=f"pyworkflowy-offload-{pool.name}",
         )
+
+    def thread_executor(self) -> ThreadPoolExecutor:
+        """The backing ThreadPoolExecutor — accessed by ctx.offload()."""
+        # _executor is annotated on the base as ThreadPoolExecutor |
+        # ProcessPoolExecutor; OffloadPool only ever constructs the thread
+        # variant, so narrow it here for callers.
+        return cast(ThreadPoolExecutor, self._executor)
 
     def execute(
         self,
@@ -241,15 +248,10 @@ class OffloadPool(PoolExecutor):
         cancel_event: threading.Event,
         task_name: str,
     ) -> Any:
-        future = self._executor.submit(fn, *args, **kwargs)
-        try:
-            return future.result(timeout=timeout)
-        except TimeoutError as exc:
-            cancel_event.set()
-            raise TaskTimeoutError(
-                f"Task {task_name!r} exceeded its timeout of {timeout}s on "
-                f"pool {self.pool.name!r} (offload)"
-            ) from exc
+        raise NotImplementedError(
+            "Offload pools are call-only — use ctx.offload() from inside a task body "
+            "instead of routing tasks through this pool."
+        )
 
 
 def build_pool_executor(pool: Pool) -> PoolExecutor:

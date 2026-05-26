@@ -18,8 +18,9 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import StrEnum
 from inspect import iscoroutinefunction
-from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, TypeVar, cast
 
+from pyworkflowy._backends import OffloadPool
 from pyworkflowy.exceptions import TaskCancelledError, TaskError
 
 if TYPE_CHECKING:
@@ -44,6 +45,10 @@ DepFailurePolicy = Literal["skip", "fail", "run-anyway"]
 
 _DEFAULT_RETRY_ON: tuple[type[BaseException], ...] = (Exception,)
 DEFAULT_POOL_NAME = "default"
+
+# Poll interval (seconds) for _wait_for_cancel — see its docstring for the
+# tradeoff (responsiveness vs. zombie threads on the happy path).
+_OFFLOAD_CANCEL_POLL_INTERVAL = 0.05
 
 
 class TaskStatus(StrEnum):
@@ -174,10 +179,10 @@ class TaskContext:
                 f"Configure one via TaskRunner(pools={{'offload': Pool(name='offload', "
                 f"kind='offload', max_workers=N), ...}})."
             )
-        executor = self._runner._get_pool_executor(pool_obj)
+        executor = cast(OffloadPool, self._runner._get_pool_executor(pool_obj))
         loop = asyncio.get_running_loop()
         future = loop.run_in_executor(
-            executor._executor,
+            executor.thread_executor(),
             functools.partial(fn, *args, **kwargs),
         )
         cancel_wait = asyncio.create_task(_wait_for_cancel(self.cancel_event))
@@ -192,7 +197,7 @@ class TaskContext:
             )
         finally:
             cancel_wait.cancel()
-            with contextlib.suppress(asyncio.CancelledError, BaseException):
+            with contextlib.suppress(asyncio.CancelledError):
                 await cancel_wait
 
 
@@ -208,7 +213,7 @@ async def _wait_for_cancel(event: threading.Event) -> None:
     threads behind on the happy path.
     """
     while not event.is_set():
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(_OFFLOAD_CANCEL_POLL_INTERVAL)
 
 
 _current_task: ContextVar[TaskContext | None] = ContextVar("pyworkflowy_current_task", default=None)

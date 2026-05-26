@@ -299,6 +299,27 @@ async def test_ctx_offload_cancels_promptly_on_handle_cancel() -> None:
         runner.shutdown()
 
 
+async def test_ctx_offload_propagates_exception() -> None:
+    """An exception raised inside the offloaded fn surfaces back to the task body."""
+
+    @task
+    async def runs() -> str:
+        ctx = current_task()
+        assert ctx is not None
+        def boom() -> None:
+            raise ValueError("kaboom")
+        try:
+            await ctx.offload(boom)
+        except ValueError as exc:
+            return f"caught:{exc}"
+        return "no-raise"
+
+    with TaskRunner() as runner:
+        h = runner.submit(runs)
+        await runner.arun()
+    assert h.result() == "caught:kaboom"
+
+
 async def test_ctx_offload_pool_is_bounded() -> None:
     """A bounded offload pool must cap concurrent offloaded calls to max_workers."""
     counter_lock = threading.Lock()
