@@ -16,6 +16,11 @@ Missed time-based fires while the scheduler was stopped are *not* backfilled.
 Event-driven jobs only fire while the scheduler is running *and* an event
 source is bound. Each call to ``do(task, *args, **kwargs)`` registers a new
 job; the same task can be scheduled multiple times with different args.
+
+The ``JobBuilder.do(task, *args, **kwargs)`` signature is stable and matches
+the stable scheduler API. Internally, ``do()`` forwards ``args`` and ``kwargs``
+to ``runner.submit()`` as ``args=tuple(...)`` and ``payload=dict(...)``,
+bridging the mutable-kwarg pattern to the immutable explicit-payload idiom.
 """
 
 from __future__ import annotations

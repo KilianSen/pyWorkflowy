@@ -286,7 +286,7 @@ class TaskRunner:
         """
         from pyworkflowy._core import _build_task  # local to avoid circular import
 
-        kwargs: dict[str, Any] = dict(payload) if payload else {}
+        kwargs: dict[str, Any] = dict(payload) if payload is not None else {}
         args_t: tuple[Any, ...] = tuple(args)
 
         if isinstance(target, Task):
