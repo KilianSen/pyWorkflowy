@@ -105,6 +105,23 @@ def test_submit_inside_runner() -> None:
         assert results[f.name].value == 42
 
 
+def test_current_task_id_matches_handle() -> None:
+    seen_id: list[str] = []
+
+    @task
+    def f() -> None:
+        ctx = current_task()
+        assert ctx is not None
+        seen_id.append(ctx.id)
+
+    with TaskRunner() as runner:
+        handle = f.submit()
+        runner.run()
+
+    assert len(seen_id) == 1
+    assert seen_id[0] == handle.id
+
+
 def test_current_task_inside_body() -> None:
     seen: list[str] = []
 

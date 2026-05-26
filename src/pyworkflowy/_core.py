@@ -120,6 +120,19 @@ class TaskContext:
     cancel_event: threading.Event
     _handle: TaskHandle[Any] | None = None
 
+    @property
+    def id(self) -> str:
+        """Unique identifier of the submitted handle backing this context.
+
+        Raises ``RuntimeError`` if called outside a runner (i.e. ``_handle``
+        was never set).
+        """
+        if self._handle is None:
+            raise RuntimeError(
+                "TaskContext.id is only available inside a running task body."
+            )
+        return self._handle.id
+
     def update_progress(self, fraction: float, message: str | None = None) -> None:
         """Report progress on the currently running task.
 
