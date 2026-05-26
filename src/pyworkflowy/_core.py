@@ -429,14 +429,17 @@ class TaskHandle(Generic[R]):
     def cancel(self) -> bool:
         """Request cancellation.
 
-        Cooperative for asyncio (raises ``CancelledError`` at the next
-        suspension point); flag-based for threads (the body must check
-        ``current_task().cancel_event``); best-effort terminate() for
-        processes. Returns ``True`` if cancellation was newly requested,
-        ``False`` if the task was already terminal or cancelling.
+        For asyncio tasks this is a *hard* cancel: the runner schedules
+        ``asyncio.Task.cancel()`` via ``loop.call_soon_threadsafe`` so the
+        await wakes with ``CancelledError`` immediately, regardless of which
+        thread invoked :meth:`cancel`. For thread / process pools cancellation
+        is cooperative — the body must check ``current_task().cancel_event``.
+        Returns ``True`` if cancellation was newly requested, ``False`` if the
+        task was already terminal or cancelling.
 
-        Safe to call from any thread — for asyncio tasks the runner schedules
-        the actual ``asyncio.Task.cancel()`` via ``call_soon_threadsafe``.
+        Safe to call from any thread. See
+        ``tests/test_cancel.py::test_cancel_from_non_loop_thread_interrupts_async_task``
+        for the cross-thread guarantee.
         """
         if self.done():
             return False
