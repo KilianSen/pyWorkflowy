@@ -205,7 +205,7 @@ Resume uses each handle's persisted ID — so the runner needs to be re-built wi
 |---------------------|----------------------------------------------------------------|
 | `JSONCheckpointer`  | Default. Args/return values must JSON-serialise. Validated at submit. |
 | `PickleCheckpointer`| Anything pickle accepts; standard pickle caveats apply.        |
-| custom              | Subclass `Checkpointer` with `save()`/`load()`.                |
+| custom              | Subclass `SnapshotCheckpointer` with `save()`/`load()`.        |
 
 Unserialisable args raise `CheckpointError` at *submit* time so you see the error where it originated.
 

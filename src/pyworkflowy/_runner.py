@@ -116,8 +116,9 @@ class TaskRunner:
             results = runner.run()
 
     Tasks pick a named pool via ``@task(pool="...")``. By default the runner
-    provides three named pools — ``"default"`` (asyncio), ``"thread"``, and
-    ``"process"`` — each sized to ``max_workers``. Pass ``pools={...}`` to
+    provides four named pools — ``"default"`` (asyncio), ``"thread"``,
+    ``"process"``, and ``"offload"`` (call-only thread pool for ``ctx.offload()``)
+    — each sized to ``max_workers``. Pass ``pools={...}`` to
     define your own (typical: ``"io"`` for thread-bound work, ``"cpu"`` for
     process-bound work, with reservation rules to keep manual work
     responsive). Retries, timeouts, and cancellation are handled here so pool

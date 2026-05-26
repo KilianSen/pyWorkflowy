@@ -636,9 +636,10 @@ def task(
         @task                       # bare — auto-named from module.qualname
         @task(name="checkout", retries=3, timeout=10.0, pool="io")
 
-    ``pool`` names a runner pool. Default runners expose three named pools
-    out of the box — ``"default"`` (asyncio), ``"thread"``, and ``"process"`` —
-    sized via ``TaskRunner(max_workers=...)``. Configure your own with
+    ``pool`` names a runner pool. Default runners expose four named pools
+    out of the box — ``"default"`` (asyncio), ``"thread"``, ``"process"``, and
+    ``"offload"`` (call-only thread pool for ``ctx.offload()``) — sized via
+    ``TaskRunner(max_workers=...)``. Configure your own with
     ``TaskRunner(pools={"io": Pool(...), ...})``.
 
     ``max_attempts`` is sugar for ``retries = max_attempts - 1`` — pick
