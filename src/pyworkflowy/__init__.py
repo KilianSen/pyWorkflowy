@@ -16,7 +16,12 @@ from pyworkflowy._core import (
     task,
 )
 from pyworkflowy._events import EventHandler, EventSource
-from pyworkflowy._persistence import Checkpointer, JSONCheckpointer, PickleCheckpointer
+from pyworkflowy._persistence import (
+    Checkpointer,
+    JSONCheckpointer,
+    PickleCheckpointer,
+    SnapshotCheckpointer,
+)
 from pyworkflowy._runner import TaskRunner, get_current_runner
 from pyworkflowy.exceptions import (
     CheckpointError,
@@ -42,6 +47,7 @@ __all__ = [
     "Pool",
     "PoolKind",
     "RetryExhaustedError",
+    "SnapshotCheckpointer",
     "Task",
     "TaskBase",
     "TaskCancelledError",

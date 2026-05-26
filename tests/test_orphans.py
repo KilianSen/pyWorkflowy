@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pyworkflowy import Checkpointer, TaskRunner, TaskStatus, task
+from pyworkflowy import SnapshotCheckpointer, TaskRunner, TaskStatus, task
 
 
 def _write_v2_state(path: Path, handles: list[dict]) -> None:
@@ -120,8 +120,13 @@ def test_resume_orphans_can_be_resubmitted(tmp_path: Path) -> None:
         assert completed[0].result() == 84
 
 
-class _TrackingCp(Checkpointer):
-    """Test-only Checkpointer recording every call for assertion."""
+class _TrackingCp(SnapshotCheckpointer):
+    """Test-only Checkpointer recording every call for assertion.
+
+    Inherits from :class:`SnapshotCheckpointer` so ``save``/``load`` are
+    legal (this test exists to prove the runner does NOT call them on the
+    row-grained path, even when they're available).
+    """
 
     def __init__(self) -> None:
         self.snapshot_writes = 0
@@ -207,7 +212,7 @@ def test_default_checkpointer_save_handle_cascades_to_save() -> None:
     """
     written_states: list[dict] = []
 
-    class SnapshotOnly(Checkpointer):
+    class SnapshotOnly(SnapshotCheckpointer):
         def __init__(self) -> None:
             self._state: dict | None = None
 

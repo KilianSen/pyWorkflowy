@@ -33,26 +33,32 @@ State schema (v2)::
         ]
     }
 
-The ABC provides two surfaces:
+Two ABCs split the contract:
 
-* **Snapshot mode** (``save``/``load``) writes the entire state dictionary in
-  one shot. Default backends — :class:`JSONCheckpointer`, :class:`PickleCheckpointer`
-  — are snapshot-based. ``load`` is the bootstrap path used by
-  :meth:`pyworkflowy.TaskRunner.resume`.
-* **Row-grained mode** (``save_handle``/``delete_handle``/``query``) updates a
-  single handle's row. Default implementations cascade to ``save`` (load,
-  mutate, write) so snapshot-only subclasses keep working. SQL-backed
-  implementations should override these for efficient UPSERT/DELETE/SELECT.
+* :class:`Checkpointer` — **per-row** writes only. The runner calls
+  :meth:`Checkpointer.save_handle` on every status transition and
+  :meth:`Checkpointer.save_initial` once per ``submit()``. SQL-backed backends
+  should override both natively (UPSERT and INSERT respectively).
+  :meth:`Checkpointer.save` / :meth:`Checkpointer.load` raise
+  :class:`NotImplementedError` by default — per-row backends cannot
+  meaningfully snapshot the whole state, so :meth:`TaskRunner.resume` will
+  reject them.
+* :class:`SnapshotCheckpointer` — adds whole-state :meth:`save` /
+  :meth:`load`. Required for :meth:`pyworkflowy.TaskRunner.resume`. Default
+  backends — :class:`JSONCheckpointer`, :class:`PickleCheckpointer` — are
+  snapshot-based. Row-grained methods cascade through ``save``/``load``
+  (load, mutate, write) so subclasses only need to implement the two snapshot
+  primitives.
 
 **Contract:** the runner calls :meth:`Checkpointer.save_handle` on **every**
 state transition of a single handle — including transient ones (``READY``,
 ``RUNNING``, ``RETRYING``, ``retry_at`` set/cleared), progress updates
-(throttled), and the terminal transition. :meth:`Checkpointer.save` is *not*
-called by the runner during normal execution; it is reserved for the default
-``save_handle`` cascade and for whole-state operations a caller initiates
-explicitly. Row-grained backends that override ``save_handle`` natively
-(one UPSERT per call) can leave ``save`` as a thin "write everything"
-fallback — the runner will not call it behind your back.
+(throttled), and the terminal transition. :meth:`SnapshotCheckpointer.save`
+is *not* called by the runner during normal execution; it is reserved for the
+default ``save_handle`` cascade on snapshot backends and for whole-state
+operations a caller initiates explicitly. Row-grained backends that override
+``save_handle`` natively (one UPSERT per call) can leave ``save`` raising
+:class:`NotImplementedError` — the runner will not call it behind your back.
 """
 
 from __future__ import annotations
@@ -72,6 +78,7 @@ __all__ = [
     "Checkpointer",
     "JSONCheckpointer",
     "PickleCheckpointer",
+    "SnapshotCheckpointer",
     "ensure_jsonable",
 ]
 
@@ -79,23 +86,65 @@ CHECKPOINT_VERSION = 2
 
 
 class Checkpointer(ABC):
-    """ABC for checkpoint storage backends.
+    """Per-row checkpoint contract.
 
-    Snapshot methods (:meth:`save`, :meth:`load`) are required; row-grained
-    methods (:meth:`save_handle`, :meth:`delete_handle`, :meth:`query`) have
-    default implementations that cascade through :meth:`save`/:meth:`load`,
-    so a minimal subclass only needs to implement the two abstract methods.
-
-    The runner emits one :meth:`save_handle` call per status transition (and
-    per throttled progress update). SQL-backed implementations should override
-    :meth:`save_handle` with an UPSERT — :meth:`save` will not be called by
-    the runner during normal execution, so there is no need to keep the two
-    paths in sync.
+    The runner calls :meth:`save_handle` on every status transition and
+    :meth:`save_initial` once per :meth:`pyworkflowy.TaskRunner.submit`.
+    SQL-backed backends should override both with UPSERT and INSERT
+    respectively. :meth:`save` and :meth:`load` raise
+    :class:`NotImplementedError` by default — only
+    :class:`SnapshotCheckpointer` subclasses are required to support
+    whole-state snapshots (used by :meth:`pyworkflowy.TaskRunner.resume`).
 
     Backends must be safe to call from a single writer (the runner) —
     concurrent writers are not supported by default. SQL-backed implementations
     can permit concurrent reads (e.g. for a UI listing tasks) by overriding
     :meth:`query`.
+    """
+
+    @abstractmethod
+    def save_handle(self, entry: dict[str, Any]) -> None:
+        """Persist a single handle's row (UPSERT)."""
+        ...
+
+    @abstractmethod
+    def delete_handle(self, handle_id: str) -> None:
+        """Drop a single handle by id. No-op if the id is not present."""
+        ...
+
+    @abstractmethod
+    def query(self, **filters: Any) -> list[dict[str, Any]]:
+        """Return handle entries matching the given equality filters."""
+        ...
+
+    def save_initial(self, entry: dict[str, Any]) -> None:
+        """First-write hook called once per :meth:`TaskRunner.submit`.
+
+        Defaults to :meth:`save_handle`. SQL-backed backends can override
+        with an INSERT (vs the UPSERT in :meth:`save_handle`) to fail fast
+        on duplicate ids.
+        """
+        self.save_handle(entry)
+
+    def save(self, state: dict[str, Any]) -> None:
+        raise NotImplementedError(
+            "save() is only supported on SnapshotCheckpointer subclasses. "
+            "Use save_handle() for per-row writes."
+        )
+
+    def load(self) -> dict[str, Any] | None:
+        raise NotImplementedError(
+            "load() is only supported on SnapshotCheckpointer subclasses. "
+            "Per-row backends must reconstruct state from query()."
+        )
+
+
+class SnapshotCheckpointer(Checkpointer):
+    """Whole-state snapshot contract — required for :meth:`TaskRunner.resume`.
+
+    Subclasses implement :meth:`save` / :meth:`load`. Default
+    :meth:`save_handle`, :meth:`delete_handle`, and :meth:`query` cascade
+    through them (load, mutate, write).
     """
 
     @abstractmethod
@@ -183,7 +232,7 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
         raise
 
 
-class JSONCheckpointer(Checkpointer):
+class JSONCheckpointer(SnapshotCheckpointer):
     """JSON-backed checkpointer. Default — no extra deps.
 
     Args, kwargs, and return values must round-trip through ``json.dumps``.
@@ -230,7 +279,7 @@ def _json_default(o: Any) -> Any:
     raise TypeError(f"Object of type {type(o).__name__} is not JSON-serialisable")
 
 
-class PickleCheckpointer(Checkpointer):
+class PickleCheckpointer(SnapshotCheckpointer):
     """Pickle-backed checkpointer for richer state.
 
     Accepts anything pickle accepts — at the cost of standard pickle caveats

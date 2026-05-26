@@ -49,6 +49,7 @@ from pyworkflowy._persistence import (
     Checkpointer,
     JSONCheckpointer,
     PickleCheckpointer,
+    SnapshotCheckpointer,
     ensure_jsonable,
 )
 from pyworkflowy.exceptions import (
@@ -1075,8 +1076,15 @@ class TaskRunner:
         result on submit). Non-terminal tasks are erased — caller re-submits
         them fresh.
         """
-        loader: Checkpointer
+        loader: SnapshotCheckpointer
         if checkpointer is not None:
+            if not isinstance(checkpointer, SnapshotCheckpointer):
+                raise TypeError(
+                    "TaskRunner.resume() requires a SnapshotCheckpointer "
+                    "(needs whole-state load). Per-row checkpointers should "
+                    "reconstruct state from query() and submit() handles back "
+                    "into a fresh runner."
+                )
             loader = checkpointer
         elif path.endswith(".pkl") or path.endswith(".pickle"):
             loader = PickleCheckpointer(path)

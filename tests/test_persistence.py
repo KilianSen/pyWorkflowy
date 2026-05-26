@@ -9,6 +9,7 @@ from pyworkflowy import (
     Checkpointer,
     JSONCheckpointer,
     PickleCheckpointer,
+    SnapshotCheckpointer,
     TaskRunner,
     TaskStatus,
     task,
@@ -162,8 +163,9 @@ def test_cannot_pass_both_path_and_checkpointer() -> None:
 
 
 def test_custom_checkpointer_abstract() -> None:
-    # Verifying ABC subclass works.
-    class Mem(Checkpointer):
+    # Verifying SnapshotCheckpointer ABC subclass works: implements save/load,
+    # gets save_handle/delete_handle/query for free via cascade.
+    class Mem(SnapshotCheckpointer):
         def __init__(self) -> None:
             self.state: dict | None = None
 
@@ -176,3 +178,69 @@ def test_custom_checkpointer_abstract() -> None:
     cp = Mem()
     cp.save({"x": 1})
     assert cp.load() == {"x": 1}
+
+
+def test_per_row_checkpointer_never_touches_save_or_load() -> None:
+    """A per-row Checkpointer (no save/load) drives submit + run cleanly.
+
+    Proves the runner never invokes save()/load() on the row-grained path.
+    """
+
+    class RowOnly(Checkpointer):
+        def __init__(self) -> None:
+            self.rows: dict[str, dict] = {}
+            self.save_calls = 0
+            self.load_calls = 0
+
+        def save_handle(self, entry: dict) -> None:
+            self.rows[entry["id"]] = dict(entry)
+
+        def delete_handle(self, handle_id: str) -> None:
+            self.rows.pop(handle_id, None)
+
+        def query(self, **filters):
+            results = list(self.rows.values())
+            for k, v in filters.items():
+                results = [h for h in results if h.get(k) == v]
+            return results
+
+        # Tripwires: blow up if the runner reaches for snapshot APIs.
+        def save(self, state):
+            self.save_calls += 1
+            raise AssertionError("runner must not call save() on per-row backend")
+
+        def load(self):
+            self.load_calls += 1
+            raise AssertionError("runner must not call load() on per-row backend")
+
+    cp = RowOnly()
+
+    @task
+    def f(x: int) -> int:
+        return x + 1
+
+    with TaskRunner(checkpointer=cp, checkpoint_interval=0) as runner:
+        h = runner.submit(f, 41)
+        runner.run()
+
+    assert cp.save_calls == 0
+    assert cp.load_calls == 0
+    # The runner persisted at least the terminal row via save_handle.
+    assert h.id in cp.rows
+    assert cp.rows[h.id]["status"] == TaskStatus.COMPLETED.value
+
+
+def test_resume_rejects_per_row_checkpointer(tmp_path: Path) -> None:
+    class RowOnly(Checkpointer):
+        def save_handle(self, entry: dict) -> None:
+            pass
+
+        def delete_handle(self, handle_id: str) -> None:
+            pass
+
+        def query(self, **filters):
+            return []
+
+    cp = RowOnly()
+    with pytest.raises(TypeError, match="SnapshotCheckpointer"):
+        TaskRunner.resume(str(tmp_path / "state.json"), checkpointer=cp)
