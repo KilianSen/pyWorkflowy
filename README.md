@@ -36,7 +36,7 @@ The wrapped object is a `Task` instance. Use `.submit(...)` to enqueue it on the
 
 ```python
 with TaskRunner() as runner:
-    handle = square.submit(5)
+    handle = square.submit(args=(5,))
     runner.run()
     assert handle.result() == 25
 
@@ -63,12 +63,12 @@ class FetchUser(TaskBase):
         return http.get(f"/users/{user_id}").json()
 
 fetch_user = FetchUser()
-handle = fetch_user.submit(42)
+handle = fetch_user.submit(args=(42,))
 ```
 
 Instantiating `FetchUser()` returns a `Task` — the same type the decorator produces. `run` may be `def` or `async def`; pyWorkflowy auto-detects.
 
-> `TaskBase` constructors take no arguments — class-level attributes configure the *task*; runtime values are passed to `submit(*args, **kwargs)` and forwarded to `run`.
+> `TaskBase` constructors take no arguments — class-level attributes configure the *task*; runtime values are passed to `submit(args=..., payload=...)` and forwarded to `run` (positionally and as keyword arguments respectively).
 
 ### `max_attempts` vs `retries`
 
@@ -100,7 +100,7 @@ Pass `depends_on=[other_handle, ...]` when submitting. The runner topologically 
 
 ```python
 with TaskRunner() as runner:
-    h_load = load_csv.submit("data.csv")
+    h_load = load_csv.submit(args=("data.csv",))
     h_clean = clean_rows.submit(depends_on=[h_load])
     h_write = write_db.submit(depends_on=[h_clean])
     runner.run()
@@ -266,7 +266,7 @@ async def fetch(url):
         return (await c.get(url)).json()
 
 runner = TaskRunner()
-h = runner.submit(fetch, "https://example.com")
+h = runner.submit(fetch, args=("https://example.com",))
 await runner.arun()
 print(await h)   # handles are awaitable
 runner.shutdown()

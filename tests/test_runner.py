@@ -18,7 +18,7 @@ def test_basic_run() -> None:
         return x + 1
 
     with TaskRunner() as runner:
-        h = f.submit(2)
+        h = f.submit(args=(2,))
         results = runner.run()
     assert h.result() == 3
     assert results[f.name].ok
@@ -30,8 +30,8 @@ def test_results_map() -> None:
         return x * 10
 
     with TaskRunner() as runner:
-        f.submit(1)
-        f.submit(2)
+        f.submit(args=(1,))
+        f.submit(args=(2,))
         # two submissions of same task — results dict keyed by name; collisions overwrite
         results = runner.run()
     assert f.name in results
@@ -42,7 +42,7 @@ def test_submit_plain_callable() -> None:
         return x + 5
 
     with TaskRunner() as runner:
-        h = runner.submit(plain, 10)
+        h = runner.submit(plain, args=(10,))
         runner.run()
     assert h.result() == 15
 
@@ -54,8 +54,8 @@ async def test_arun_in_existing_loop() -> None:
         return x * 3
 
     runner = TaskRunner()
-    h = runner.submit(f, 5)
-    h2 = runner.submit(f, 4)
+    h = runner.submit(f, args=(5,))
+    h2 = runner.submit(f, args=(4,))
     await runner.arun()
     runner.shutdown()
     assert h.result() == 15
@@ -191,7 +191,7 @@ async def test_handle_await() -> None:
         return x + 1
 
     runner = TaskRunner()
-    h = runner.submit(f, 9)
+    h = runner.submit(f, args=(9,))
     # arun returns when all are done
     await runner.arun()
     runner.shutdown()

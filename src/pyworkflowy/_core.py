@@ -13,7 +13,7 @@ import contextlib
 import functools
 import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -278,14 +278,21 @@ class Task(Generic[R]):
 
     def submit(
         self,
-        *args: Any,
+        *,
+        payload: Mapping[str, Any] | None = None,
+        args: tuple[Any, ...] = (),
         depends_on: Iterable[TaskHandle[Any]] = (),
         runner: TaskRunner | None = None,
         source: str = "manual",
         dedup_key: str | None = None,
-        **kwargs: Any,
     ) -> TaskHandle[R]:
         """Submit this task to ``runner`` (or the ambient one) and return its handle.
+
+        ``payload`` is a mapping of keyword arguments to pass to the task body;
+        ``args`` is a tuple of positional arguments. (Where you would once have
+        written ``task.submit(1, 2, foo="bar")``, write
+        ``task.submit(args=(1, 2), payload={"foo": "bar"})`` — this avoids
+        kwarg-name collisions with ``source``/``depends_on``/``dedup_key``.)
 
         ``depends_on`` lists the handles that must finish before this task
         becomes ``READY``. The ``on_dep_failure`` policy on this :class:`Task`
@@ -297,7 +304,7 @@ class Task(Generic[R]):
         claim a reserved slot.
 
         ``dedup_key`` (or this task's ``dedup_by`` config, which auto-computes
-        a key from kwargs) suppresses duplicate pending submissions: if a
+        a key from the payload) suppresses duplicate pending submissions: if a
         non-terminal handle already exists with the same ``(task.name, key)``
         pair, that handle is returned instead of creating a new one.
         """
@@ -312,11 +319,11 @@ class Task(Generic[R]):
             )
         return active.submit(
             self,
-            *args,
+            payload=payload,
+            args=args,
             depends_on=tuple(depends_on),
             source=source,
             dedup_key=dedup_key,
-            **kwargs,
         )
 
 

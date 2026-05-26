@@ -71,7 +71,7 @@ def test_class_based_runs_through_runner() -> None:
 
     add = Adder()
     with TaskRunner() as runner:
-        h = add.submit(3, 4)
+        h = add.submit(args=(3, 4))
         runner.run()
     assert h.result() == 7
     assert h.status == TaskStatus.COMPLETED

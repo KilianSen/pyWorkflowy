@@ -25,7 +25,7 @@ def test_json_checkpointer_writes_state(tmp_path: Path) -> None:
         return x * 2
 
     with TaskRunner(checkpoint_path=str(cp_path), checkpoint_interval=0) as runner:
-        runner.submit(f, 5)
+        runner.submit(f, args=(5,))
         runner.run()
 
     assert cp_path.exists()
@@ -48,7 +48,7 @@ def test_resume_skips_completed_tasks(tmp_path: Path) -> None:
 
     # First run: produces a checkpoint.
     with TaskRunner(checkpoint_path=str(cp_path), checkpoint_interval=0) as runner:
-        h = runner.submit(step, 3)
+        h = runner.submit(step, args=(3,))
         runner.run()
         first_id = h.id
 
@@ -74,7 +74,7 @@ def test_resume_with_matching_id_skips_run(tmp_path: Path) -> None:
         return x
 
     runner = TaskRunner(checkpoint_path=str(cp_path), checkpoint_interval=0)
-    runner.submit(step, 9)
+    runner.submit(step, args=(9,))
     runner.run()
     runner.shutdown()
 
@@ -116,7 +116,7 @@ def test_json_checkpointer_rejects_unserializable_args(tmp_path: Path) -> None:
         TaskRunner(checkpoint_path=str(tmp_path / "x.json"), checkpoint_interval=0) as runner,
         pytest.raises(CheckpointError),
     ):
-        runner.submit(f, object())
+        runner.submit(f, args=(object(),))
 
 
 def test_pickle_checkpointer(tmp_path: Path) -> None:
@@ -128,7 +128,7 @@ def test_pickle_checkpointer(tmp_path: Path) -> None:
         return x + 1
 
     with TaskRunner(checkpointer=cp, checkpoint_interval=0) as runner:
-        runner.submit(f, 1)
+        runner.submit(f, args=(1,))
         runner.run()
 
     assert cp_path.exists()
@@ -221,7 +221,7 @@ def test_per_row_checkpointer_never_touches_save_or_load() -> None:
         return x + 1
 
     with TaskRunner(checkpointer=cp, checkpoint_interval=0) as runner:
-        h = runner.submit(f, 41)
+        h = runner.submit(f, args=(41,))
         runner.run()
 
     assert cp.save_calls == 0
@@ -256,7 +256,7 @@ def test_submit_persists_pending_row_immediately(tmp_path: Path) -> None:
         return x * 2
 
     with TaskRunner(checkpoint_path=str(cp_path), checkpoint_interval=0) as runner:
-        runner.submit(f, 5)
+        runner.submit(f, args=(5,))
         # Do NOT call runner.run() — we want to verify the row is there immediately.
         assert cp_path.exists(), "checkpoint file should exist after submit()"
         state = json.loads(cp_path.read_text())
@@ -300,7 +300,7 @@ def test_save_initial_cascades_to_save_handle_by_default(tmp_path: Path) -> None
 
     runner = TaskRunner(checkpointer=cp, checkpoint_interval=0)
     try:
-        h = runner.submit(g, 10)
+        h = runner.submit(g, args=(10,))
         # Prove the cascade: save_initial fired once AND it delegated to save_handle.
         assert cp.save_initial_count == 1, (
             f"expected 1 save_initial call after submit(), got {cp.save_initial_count}"

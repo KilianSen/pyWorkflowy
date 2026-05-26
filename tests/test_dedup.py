@@ -13,8 +13,8 @@ def test_dedup_key_returns_same_handle_when_pending() -> None:
         return x
 
     runner = TaskRunner()
-    h1 = runner.submit(f, 1, dedup_key="k1")
-    h2 = runner.submit(f, 1, dedup_key="k1")
+    h1 = runner.submit(f, args=(1,), dedup_key="k1")
+    h2 = runner.submit(f, args=(1,), dedup_key="k1")
     assert h1 is h2  # second submit returns the existing pending handle
     runner.run()
     runner.shutdown()
@@ -47,8 +47,8 @@ def test_different_keys_dont_collide() -> None:
         return x
 
     with TaskRunner() as runner:
-        h1 = runner.submit(f, 1, dedup_key="a")
-        h2 = runner.submit(f, 1, dedup_key="b")
+        h1 = runner.submit(f, args=(1,), dedup_key="a")
+        h2 = runner.submit(f, args=(1,), dedup_key="b")
         runner.run()
     assert h1 is not h2
 
@@ -63,9 +63,9 @@ def test_dedup_by_auto_computes_key() -> None:
         return book_id
 
     runner = TaskRunner()
-    h1 = runner.submit(refresh, book_id=7)
-    h2 = runner.submit(refresh, book_id=7)
-    h3 = runner.submit(refresh, book_id=8)
+    h1 = runner.submit(refresh, payload={"book_id": 7})
+    h2 = runner.submit(refresh, payload={"book_id": 7})
+    h3 = runner.submit(refresh, payload={"book_id": 8})
     assert h1 is h2
     assert h1 is not h3
     runner.run()
@@ -80,7 +80,7 @@ def test_dedup_by_missing_kwarg_raises() -> None:
         return book_id
 
     with TaskRunner() as runner, pytest.raises(ValueError, match="dedup_by"):
-        runner.submit(refresh, 7)  # positional, not kwarg
+        runner.submit(refresh, args=(7,))  # positional, not in payload
 
 
 async def test_dedup_while_running_still_returns_running_handle() -> None:
@@ -121,7 +121,7 @@ def test_find_active_and_has_active() -> None:
         return x
 
     runner = TaskRunner()
-    h = runner.submit(g, 42, dedup_key="k")
+    h = runner.submit(g, args=(42,), dedup_key="k")
     task_name = h.name  # fully-qualified name used as the index key
 
     # Before run: handle is non-terminal, should be visible.

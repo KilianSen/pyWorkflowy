@@ -47,7 +47,7 @@ async def test_aserve_picks_up_submission_after_start() -> None:
     try:
         # Give aserve a tick to enter the idle wait.
         await asyncio.sleep(0.05)
-        h = runner.submit(f, 21)
+        h = runner.submit(f, args=(21,))
         # Wait for completion, then verify.
         await asyncio.wait_for(asyncio.to_thread(h.wait, 2.0), timeout=2.5)
         assert h.result() == 42
@@ -69,7 +69,7 @@ async def test_aserve_cross_thread_submit_wakes_loop() -> None:
     handle_box: list[Any] = []
 
     def submit_from_thread() -> None:
-        h = runner.submit(f, 10)
+        h = runner.submit(f, args=(10,))
         handle_box.append(h)
 
     try:
@@ -99,7 +99,7 @@ async def test_aserve_runs_multiple_submissions() -> None:
     serve_task = asyncio.create_task(runner.aserve())
     try:
         await asyncio.sleep(0.05)
-        handles = [runner.submit(f, i) for i in range(20)]
+        handles = [runner.submit(f, args=(i,)) for i in range(20)]
         for h in handles:
             await asyncio.wait_for(asyncio.to_thread(h.wait, 2.0), timeout=2.5)
         assert [h.result() for h in handles] == list(range(20))

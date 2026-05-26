@@ -79,7 +79,7 @@ def test_dep_failure_policy_fail() -> None:
 
     with TaskRunner(on_task_error="continue") as runner:
         h_bad = runner.submit(bad)
-        h_down = runner.submit(downstream, 0, depends_on=[h_bad])
+        h_down = runner.submit(downstream, args=(0,), depends_on=[h_bad])
         runner.run()
 
     assert h_bad.status == TaskStatus.FAILED
@@ -163,9 +163,9 @@ def test_diamond_dependency() -> None:
         h_root = runner.submit(root)
         # Pass the actual values via callable closures by chaining args manually:
         # simplest: have left/right take a fixed value, join sum from somewhere else.
-        h_left = runner.submit(left, 1, depends_on=[h_root])
-        h_right = runner.submit(right, 1, depends_on=[h_root])
-        h_join = runner.submit(join, 11, 21, depends_on=[h_left, h_right])
+        h_left = runner.submit(left, args=(1,), depends_on=[h_root])
+        h_right = runner.submit(right, args=(1,), depends_on=[h_root])
+        h_join = runner.submit(join, args=(11, 21), depends_on=[h_left, h_right])
         runner.run()
 
     assert h_join.result() == 32

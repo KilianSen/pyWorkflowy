@@ -112,7 +112,7 @@ class TaskRunner:
     automatic shutdown::
 
         with TaskRunner(max_workers=4) as runner:
-            handle = my_task.submit(42)
+            handle = my_task.submit(args=(42,))
             results = runner.run()
 
     Tasks pick a named pool via ``@task(pool="...")``. By default the runner
@@ -263,22 +263,31 @@ class TaskRunner:
     def submit(
         self,
         target: Task[Any] | Callable[..., Any],
-        *args: Any,
+        *,
+        payload: Mapping[str, Any] | None = None,
+        args: tuple[Any, ...] = (),
         depends_on: Iterable[TaskHandle[Any]] = (),
         source: str = "manual",
         dedup_key: str | None = None,
-        **kwargs: Any,
     ) -> TaskHandle[Any]:
         """Submit a :class:`Task` (or a plain callable) for execution.
 
         Plain callables are wrapped with default config — equivalent to
-        ``@task(fn)``. ``depends_on`` lists already-submitted handles whose
-        completion gates this task's readiness. ``source`` tags the
-        submission for pool reservation purposes (see :class:`Pool`). Raises
+        ``@task(fn)``. ``payload`` is a mapping of keyword arguments to pass to
+        the task body; ``args`` is a tuple of positional arguments. (Where you
+        would once have written ``runner.submit(t, 1, 2, foo="bar")``, write
+        ``runner.submit(t, args=(1, 2), payload={"foo": "bar"})`` — this avoids
+        kwarg-name collisions with ``source``/``depends_on``/``dedup_key``.)
+        ``depends_on`` lists already-submitted handles whose completion gates
+        this task's readiness. ``source`` tags the submission for pool
+        reservation purposes (see :class:`Pool`). Raises
         :class:`pyworkflowy.CycleError` immediately if the new edge would
         close a cycle.
         """
         from pyworkflowy._core import _build_task  # local to avoid circular import
+
+        kwargs: dict[str, Any] = dict(payload) if payload else {}
+        args_t: tuple[Any, ...] = tuple(args)
 
         if isinstance(target, Task):
             task_obj: Task[Any] = target
@@ -349,7 +358,7 @@ class TaskRunner:
         # If JSON checkpointing is on, eagerly verify args are serialisable so we
         # don't blow up mid-run. Skip for pickle, which is more permissive.
         if isinstance(self._checkpointer, JSONCheckpointer):
-            ensure_jsonable(list(args), where=f"args for task {task_obj.name!r}")
+            ensure_jsonable(list(args_t), where=f"args for task {task_obj.name!r}")
             ensure_jsonable(dict(kwargs), where=f"kwargs for task {task_obj.name!r}")
 
         handle_id = self._next_handle_id(task_obj.name)
@@ -357,7 +366,7 @@ class TaskRunner:
             runner=self,
             task=task_obj,
             handle_id=handle_id,
-            args=args,
+            args=args_t,
             kwargs=kwargs,
             depends_on=depends_on_t,
             source=source,

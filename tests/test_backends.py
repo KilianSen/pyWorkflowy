@@ -12,7 +12,7 @@ def test_thread_backend_runs() -> None:
         return x * 2
 
     with TaskRunner() as runner:
-        h = runner.submit(f, 21)
+        h = runner.submit(f, args=(21,))
         runner.run()
     assert h.result() == 42
 
@@ -38,7 +38,7 @@ def test_process_backend_runs() -> None:
     sq = task(pool="process")(square)
 
     with TaskRunner() as runner:
-        h = runner.submit(sq, 6)
+        h = runner.submit(sq, args=(6,))
         runner.run()
 
     assert h.result() == 36
@@ -59,7 +59,7 @@ def test_process_backend_propagates_error() -> None:
 def test_process_backend_multiple_args() -> None:
     a = task(pool="process")(add)
     with TaskRunner() as runner:
-        h = runner.submit(a, 10, 11)
+        h = runner.submit(a, args=(10, 11))
         runner.run()
     assert h.result() == 21
 
@@ -69,7 +69,7 @@ def test_thread_backend_concurrent() -> None:
     f = task(pool="thread")(slow_square)
 
     with TaskRunner(max_workers=4) as runner:
-        handles = [runner.submit(f, x, 0.05) for x in range(4)]
+        handles = [runner.submit(f, args=(x, 0.05)) for x in range(4)]
         runner.run()
 
     assert [h.result() for h in handles] == [0, 1, 4, 9]
@@ -82,7 +82,7 @@ async def test_async_backend_runs() -> None:
         return x + 100
 
     runner = TaskRunner()
-    h = runner.submit(f, 1)
+    h = runner.submit(f, args=(1,))
     await runner.arun()
     runner.shutdown()
     assert h.result() == 101
@@ -94,7 +94,7 @@ async def test_sync_function_on_asyncio_backend() -> None:
         return x + 5
 
     runner = TaskRunner()
-    h = runner.submit(f, 3)
+    h = runner.submit(f, args=(3,))
     await runner.arun()
     runner.shutdown()
     assert h.result() == 8

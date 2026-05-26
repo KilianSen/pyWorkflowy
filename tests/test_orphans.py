@@ -112,7 +112,12 @@ def test_resume_orphans_can_be_resubmitted(tmp_path: Path) -> None:
         assert len(orphans) == 1
         # Re-submit using the caller's task and the persisted args.
         for o in orphans:
-            runner.submit(f, *o["args"], **o["kwargs"], source=o["source"])
+            runner.submit(
+                f,
+                args=tuple(o["args"]),
+                payload=o["kwargs"],
+                source=o["source"],
+            )
         runner.run()
         handles = runner.handles()
         completed = [h for h in handles if h.status == TaskStatus.COMPLETED]
@@ -166,7 +171,7 @@ def test_in_memory_row_checkpointer_save_handle_called() -> None:
         return x * 2
 
     with TaskRunner(checkpointer=cp) as runner:
-        runner.submit(f, 7)
+        runner.submit(f, args=(7,))
         runner.run()
 
     # Terminal transition was persisted via save_handle, not via full save().
@@ -230,7 +235,7 @@ def test_default_checkpointer_save_handle_cascades_to_save() -> None:
         return x + 1
 
     with TaskRunner(checkpointer=cp) as runner:
-        runner.submit(f, 1)
+        runner.submit(f, args=(1,))
         runner.run()
 
     # save() was hit via cascade — at least once.
@@ -248,9 +253,9 @@ def test_query_filters_default_implementation(tmp_path: Path) -> None:
 
     cp_path = tmp_path / "state.json"
     with TaskRunner(checkpoint_path=str(cp_path), checkpoint_interval=0) as runner:
-        runner.submit(f, 1, source="manual")
-        runner.submit(f, 2, source="cron")
-        runner.submit(f, 3, source="background")
+        runner.submit(f, args=(1,), source="manual")
+        runner.submit(f, args=(2,), source="cron")
+        runner.submit(f, args=(3,), source="background")
         runner.run()
 
     from pyworkflowy import JSONCheckpointer

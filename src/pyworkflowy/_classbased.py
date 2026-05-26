@@ -48,7 +48,7 @@ class TaskBase:
                 ...
 
         fetch_user = FetchUser()
-        handle = fetch_user.submit(42)
+        handle = fetch_user.submit(args=(42,))
     """
 
     name: str | None = None
@@ -80,8 +80,8 @@ class TaskBase:
         if args or kwargs:
             raise TypeError(
                 f"{cls.__name__} takes no constructor arguments — pass values to "
-                "`.submit(*args, **kwargs)` instead. Class-level attributes "
-                "configure the task itself; runtime args go to `run`."
+                "`.submit(args=..., payload=...)` instead. Class-level "
+                "attributes configure the task itself; runtime args go to `run`."
             )
         instance = object.__new__(cls)
         # Bind `run` so the resulting Task.fn behaves like a plain function.

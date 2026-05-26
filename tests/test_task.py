@@ -98,7 +98,7 @@ def test_submit_inside_runner() -> None:
         return x * 2
 
     with TaskRunner() as runner:
-        handle = f.submit(21)
+        handle = f.submit(args=(21,))
         results = runner.run()
         assert handle.status == TaskStatus.COMPLETED
         assert handle.result() == 42
