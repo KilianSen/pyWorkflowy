@@ -1,12 +1,26 @@
 # CHANGELOG
 
 
-## v0.3.0 (2026-05-24)
+## v0.7.0 (2026-05-26)
+
+### Breaking Changes
+
+- **`submit()` no longer takes `*args` / `**kwargs`.** Both `TaskRunner.submit(target, ...)` and `Task.submit(...)` now require keyword-only `args: tuple = ()` and `payload: Mapping[str, Any] | None = None`. Migration:
+  - `runner.submit(f, 5, dedup_key="k")` → `runner.submit(f, args=(5,), dedup_key="k")`
+  - `task.submit(book_id=7)` → `task.submit(payload={"book_id": 7})`
 
 ### Features
 
-- Update version to 0.6.0 and enhance task runner with serve functionality
-  ([`061d144`](https://github.com/KilianSen/pyWorkflowy/commit/061d1446e1cf50f0ceb13379945501da17c01728))
+- `TaskContext.id` — read the running handle's id without reaching into `_handle`.
+- `TaskRunner.find_active(name, dedup_key)` / `TaskRunner.has_active(name, dedup_key)` — public dedup-index lookup.
+- `Checkpointer.save_initial(entry)` — first-write hook on submit (defaults to cascading `save_handle`); SQL-backed checkpointers can override for `INSERT` semantics.
+- `TaskRunner.submit()` now persists the initial PENDING row via `save_initial` so hosts inspecting the checkpointer right after submit see the handle immediately.
+- New `Pool(kind="offload")` and `TaskContext.offload(fn, *args, **kwargs)` for routing sync C-extension chunks (Pillow, ONNX, numpy) to a runner-managed thread pool from inside async tasks. Default runners get an `"offload"` pool sized to `max_workers`. Tasks may not target an offload-kind pool with `@task(pool=...)` — those pools are call-only.
+- New `SnapshotCheckpointer(Checkpointer)` ABC: the per-row `Checkpointer` contract no longer requires `save`/`load`; only `SnapshotCheckpointer` subclasses do. `TaskRunner.resume()` now requires a `SnapshotCheckpointer`. `JSONCheckpointer` / `PickleCheckpointer` inherit from `SnapshotCheckpointer`.
+
+### Documentation
+
+- `TaskHandle.cancel` docstring now spells out the cross-thread *hard* cancel for asyncio (the runner schedules `asyncio.Task.cancel()` via `call_soon_threadsafe` — implemented since 0.6.0, just under-documented).
 
 
 ## v0.2.0 (2026-05-23)
