@@ -255,8 +255,7 @@ def test_submit_persists_pending_row_immediately(tmp_path: Path) -> None:
     def f(x: int) -> int:
         return x * 2
 
-    runner = TaskRunner(checkpoint_path=str(cp_path), checkpoint_interval=0)
-    try:
+    with TaskRunner(checkpoint_path=str(cp_path), checkpoint_interval=0) as runner:
         runner.submit(f, 5)
         # Do NOT call runner.run() — we want to verify the row is there immediately.
         assert cp_path.exists(), "checkpoint file should exist after submit()"
@@ -265,8 +264,6 @@ def test_submit_persists_pending_row_immediately(tmp_path: Path) -> None:
         entry = state["handles"][0]
         assert entry["status"] == TaskStatus.PENDING.value
         assert entry["args"] == [5]
-    finally:
-        runner.shutdown()
 
 
 def test_save_initial_cascades_to_save_handle_by_default(tmp_path: Path) -> None:
@@ -275,7 +272,12 @@ def test_save_initial_cascades_to_save_handle_by_default(tmp_path: Path) -> None
     class CountingCheckpointer(Checkpointer):
         def __init__(self) -> None:
             self.rows: dict[str, dict] = {}
+            self.save_initial_count: int = 0
             self.save_handle_count = 0
+
+        def save_initial(self, entry: dict) -> None:
+            self.save_initial_count += 1
+            super().save_initial(entry)
 
         def save_handle(self, entry: dict) -> None:
             self.rows[entry["id"]] = dict(entry)
@@ -290,8 +292,6 @@ def test_save_initial_cascades_to_save_handle_by_default(tmp_path: Path) -> None
                 results = [h for h in results if h.get(k) == v]
             return results
 
-        # save_initial is NOT overridden — it should cascade to save_handle.
-
     cp = CountingCheckpointer()
 
     @task
@@ -301,7 +301,10 @@ def test_save_initial_cascades_to_save_handle_by_default(tmp_path: Path) -> None
     runner = TaskRunner(checkpointer=cp, checkpoint_interval=0)
     try:
         h = runner.submit(g, 10)
-        # One call from save_initial cascade before run().
+        # Prove the cascade: save_initial fired once AND it delegated to save_handle.
+        assert cp.save_initial_count == 1, (
+            f"expected 1 save_initial call after submit(), got {cp.save_initial_count}"
+        )
         assert cp.save_handle_count == 1, (
             f"expected 1 save_handle call after submit(), got {cp.save_handle_count}"
         )
