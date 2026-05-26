@@ -109,3 +109,40 @@ async def test_dedup_while_running_still_returns_running_handle() -> None:
     await asyncio.gather(runner.arun(), run_then_release())
     runner.shutdown()
     assert h1.status == TaskStatus.COMPLETED
+
+
+def test_find_active_and_has_active() -> None:
+    """find_active returns the live handle before run; both methods report
+    False/None after the task completes.
+    """
+
+    @task
+    def g(x: int) -> int:
+        return x
+
+    runner = TaskRunner()
+    h = runner.submit(g, 42, dedup_key="k")
+    task_name = h.name  # fully-qualified name used as the index key
+
+    # Before run: handle is non-terminal, should be visible.
+    assert runner.has_active(task_name, "k") is True
+    found = runner.find_active(task_name, "k")
+    assert found is h
+
+    runner.run()
+    runner.shutdown()
+
+    # After run: handle is terminal, index should be empty.
+    assert runner.has_active(task_name, "k") is False
+    assert runner.find_active(task_name, "k") is None
+
+
+def test_find_active_missing_key() -> None:
+    """A key that was never submitted returns None / False."""
+
+    runner = TaskRunner()
+
+    assert runner.find_active("nonexistent", "no-such-key") is None
+    assert runner.has_active("nonexistent", "no-such-key") is False
+
+    runner.shutdown()

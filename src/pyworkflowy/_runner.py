@@ -903,6 +903,15 @@ class TaskRunner:
         with self._lock:
             return {h.name: h._result for h in self._handles.values() if h._result is not None}
 
+    def find_active(self, name: str, dedup_key: str) -> TaskHandle[Any] | None:
+        """Return the non-terminal handle for (name, dedup_key), if any."""
+        with self._lock:
+            return self._dedup_index.get((name, dedup_key))
+
+    def has_active(self, name: str, dedup_key: str) -> bool:
+        """True iff a non-terminal handle exists for (name, dedup_key)."""
+        return self.find_active(name, dedup_key) is not None
+
     # ---------- cancellation ----------
 
     def cancel_all(self) -> int:
