@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from pyworkflowy._core import TaskContext
 
 __all__ = [
+    "OffloadPool",
     "Pool",
     "PoolExecutor",
     "PoolKind",
@@ -35,7 +36,7 @@ __all__ = [
 ]
 
 
-PoolKind = Literal["asyncio", "thread", "process"]
+PoolKind = Literal["asyncio", "thread", "process", "offload"]
 
 
 # ---------- pool config ----------
@@ -69,10 +70,10 @@ class Pool:
             raise ValueError(
                 f"Pool {self.name!r}: max_workers must be >= 1, got {self.max_workers}"
             )
-        if self.kind not in ("asyncio", "thread", "process"):
+        if self.kind not in ("asyncio", "thread", "process", "offload"):
             raise ValueError(
-                f"Pool {self.name!r}: kind must be 'asyncio', 'thread', or 'process'; "
-                f"got {self.kind!r}"
+                f"Pool {self.name!r}: kind must be 'asyncio', 'thread', 'process', "
+                f"or 'offload'; got {self.kind!r}"
             )
         # Resolve auto reserved_slots in-place via object.__setattr__ (frozen dataclass).
         if self.reserved_slots == -1:
@@ -207,16 +208,63 @@ class ProcessPool(PoolExecutor):
             ) from exc
 
 
+class OffloadPool(PoolExecutor):
+    """Call-only thread pool for :meth:`TaskContext.offload` invocations.
+
+    Structurally identical to :class:`ThreadPool`, but tasks may *not* target
+    an offload-kind pool via ``@task(pool=...)``. The runner rejects such
+    submissions at :meth:`TaskRunner.submit` time. Instead, offload pools
+    are invoked from inside an async task body via ``ctx.offload(fn, ...)``
+    to run sync C-extension chunks (Pillow, ONNX, numpy) off the event loop
+    without blocking it.
+
+    The :meth:`execute` method is implemented for symmetry with the other
+    :class:`PoolExecutor` subclasses, but the runner will never call it for
+    offload kinds — ``ctx.offload`` schedules work directly through the
+    underlying ``_executor`` via ``loop.run_in_executor``.
+    """
+
+    def __init__(self, pool: Pool) -> None:
+        self.pool = pool
+        self._executor = ThreadPoolExecutor(
+            max_workers=pool.max_workers,
+            thread_name_prefix=f"pyworkflowy-offload-{pool.name}",
+        )
+
+    def execute(
+        self,
+        fn: Callable[..., Any],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        *,
+        timeout: float | None,
+        cancel_event: threading.Event,
+        task_name: str,
+    ) -> Any:
+        future = self._executor.submit(fn, *args, **kwargs)
+        try:
+            return future.result(timeout=timeout)
+        except TimeoutError as exc:
+            cancel_event.set()
+            raise TaskTimeoutError(
+                f"Task {task_name!r} exceeded its timeout of {timeout}s on "
+                f"pool {self.pool.name!r} (offload)"
+            ) from exc
+
+
 def build_pool_executor(pool: Pool) -> PoolExecutor:
     """Build a :class:`PoolExecutor` for ``pool``.
 
     The asyncio kind is special-cased upstream and does not produce a
-    :class:`PoolExecutor` — only ``thread`` and ``process`` return one.
+    :class:`PoolExecutor` — only ``thread``, ``process``, and ``offload``
+    return one.
     """
     if pool.kind == "thread":
         return ThreadPool(pool)
     if pool.kind == "process":
         return ProcessPool(pool)
+    if pool.kind == "offload":
+        return OffloadPool(pool)
     raise ValueError(
         f"Pool {pool.name!r}: kind={pool.kind!r} does not need an executor "
         "(asyncio kind runs inline on the runner's loop)."

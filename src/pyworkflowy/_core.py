@@ -9,6 +9,8 @@ to :mod:`pyworkflowy._runner` and the pool executors in
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import functools
 import threading
 import time
 from collections.abc import Callable, Iterable
@@ -119,6 +121,7 @@ class TaskContext:
     attempt: int
     cancel_event: threading.Event
     _handle: TaskHandle[Any] | None = None
+    _runner: TaskRunner | None = None
 
     @property
     def id(self) -> str:
@@ -145,6 +148,67 @@ class TaskContext:
             return
         clamped = max(0.0, min(1.0, float(fraction)))
         self._handle._update_progress(clamped, message)
+
+    async def offload(
+        self,
+        fn: Callable[..., R],
+        *args: Any,
+        pool: str = "offload",
+        **kwargs: Any,
+    ) -> R:
+        """Run ``fn(*args, **kwargs)`` on the runner's offload thread pool.
+
+        The await wakes with :class:`TaskCancelledError` if this task's cancel
+        event fires before the call returns. The thread itself keeps running
+        until ``fn`` completes naturally (Python threads cannot be killed);
+        its result is discarded.
+        """
+        if self._runner is None:
+            raise RuntimeError(
+                "TaskContext.offload is only valid inside a running task body."
+            )
+        pool_obj = self._runner._pools.get(pool)
+        if pool_obj is None or pool_obj.kind != "offload":
+            raise ValueError(
+                f"No offload-kind pool named {pool!r} on this runner. "
+                f"Configure one via TaskRunner(pools={{'offload': Pool(name='offload', "
+                f"kind='offload', max_workers=N), ...}})."
+            )
+        executor = self._runner._get_pool_executor(pool_obj)
+        loop = asyncio.get_running_loop()
+        future = loop.run_in_executor(
+            executor._executor,
+            functools.partial(fn, *args, **kwargs),
+        )
+        cancel_wait = asyncio.create_task(_wait_for_cancel(self.cancel_event))
+        try:
+            done, _ = await asyncio.wait(
+                (future, cancel_wait), return_when=asyncio.FIRST_COMPLETED
+            )
+            if future in done:
+                return future.result()
+            raise TaskCancelledError(
+                f"Task {self.name!r} was cancelled during offload"
+            )
+        finally:
+            cancel_wait.cancel()
+            with contextlib.suppress(asyncio.CancelledError, BaseException):
+                await cancel_wait
+
+
+async def _wait_for_cancel(event: threading.Event) -> None:
+    """Wait for a :class:`threading.Event` to fire from inside an asyncio coroutine.
+
+    Used by :meth:`TaskContext.offload` to race a cancellation flag against a
+    futures-backed offload call. We poll instead of dispatching ``event.wait``
+    onto an executor: the executor approach leaks a blocked thread per
+    successful offload (the asyncio.Task can be cancelled, but the worker
+    thread stuck in :meth:`threading.Event.wait` cannot). Polling at ~50 ms is
+    quick enough to react to cancellation promptly without leaving zombie
+    threads behind on the happy path.
+    """
+    while not event.is_set():
+        await asyncio.sleep(0.05)
 
 
 _current_task: ContextVar[TaskContext | None] = ContextVar("pyworkflowy_current_task", default=None)

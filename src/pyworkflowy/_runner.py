@@ -97,6 +97,7 @@ def _default_pools(max_workers: int) -> dict[str, Pool]:
         DEFAULT_POOL_NAME: Pool(name=DEFAULT_POOL_NAME, kind="asyncio", max_workers=max_workers),
         "thread": Pool(name="thread", kind="thread", max_workers=max_workers),
         "process": Pool(name="process", kind="process", max_workers=max_workers),
+        "offload": Pool(name="offload", kind="offload", max_workers=max_workers),
     }
 
 
@@ -306,6 +307,12 @@ class TaskRunner:
             raise ValueError(
                 f"Task {task_obj.name!r} is async but pool {pool.name!r} is of kind "
                 f"{pool.kind!r}. Async tasks require a pool of kind 'asyncio'."
+            )
+        if pool.kind == "offload":
+            raise ValueError(
+                f"Task {task_obj.name!r} declared pool={task_obj.pool!r} of kind "
+                f"'offload'. Offload pools are call-only — invoke ctx.offload() "
+                f"from inside a task body instead."
             )
 
         depends_on_t = tuple(depends_on)
@@ -708,6 +715,7 @@ class TaskRunner:
             attempt=1,
             cancel_event=handle._cancel_event,
             _handle=handle,
+            _runner=self,
         )
         try:
             if handle._cancel_event.is_set():

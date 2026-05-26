@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 
 import pytest
 
-from pyworkflowy import Pool, TaskRunner, TaskStatus, task
+from pyworkflowy import Pool, TaskRunner, TaskStatus, current_task, task
 from pyworkflowy._backends import build_pool_executor
 
 
@@ -226,3 +227,113 @@ def test_task_submit_source_kwarg() -> None:
         h = f.submit(source="cron")
         runner.run()
     assert h.source == "cron"
+
+
+# ---------- offload pool ----------
+
+
+def test_offload_kind_pool_rejects_task_submission() -> None:
+    @task(pool="offload")
+    def blocking() -> int:
+        return 1
+
+    with TaskRunner() as runner, pytest.raises(ValueError, match="call-only"):
+        runner.submit(blocking)
+
+
+async def test_ctx_offload_runs_blocking_fn() -> None:
+    @task
+    async def caller() -> str:
+        ctx = current_task()
+        assert ctx is not None
+        await ctx.offload(time.sleep, 0.05)
+        return "done"
+
+    runner = TaskRunner()
+    h = runner.submit(caller)
+    await runner.arun()
+    runner.shutdown()
+    assert h.result() == "done"
+
+
+async def test_ctx_offload_cancels_promptly_on_handle_cancel() -> None:
+    """Cancelling the handle while ctx.offload is awaiting a sleep should
+    surface TaskCancelledError on the await within ~50ms — well below the
+    underlying sleep duration. The blocking thread itself runs to completion
+    (Python threads cannot be killed), which is why we don't put a 5s sleep
+    here: shutdown(wait=True) below would have to wait it out.
+    """
+
+    @task
+    async def offloader() -> str:
+        ctx = current_task()
+        assert ctx is not None
+        await ctx.offload(time.sleep, 1.0)
+        return "done"
+
+    runner = TaskRunner(on_task_error="continue")
+    h = runner.submit(offloader)
+
+    async def kick_from_thread() -> None:
+        await asyncio.sleep(0.05)
+
+        def cancel_off_loop() -> None:
+            h.cancel()
+
+        thread = threading.Thread(target=cancel_off_loop, daemon=True)
+        thread.start()
+        thread.join(timeout=1.0)
+
+    start = time.monotonic()
+    try:
+        await asyncio.gather(runner.arun(), kick_from_thread())
+        elapsed = time.monotonic() - start
+        assert elapsed < 0.5, (
+            f"offload cancellation did not interrupt promptly (elapsed {elapsed:.2f}s)"
+        )
+        assert h.status == TaskStatus.CANCELLED
+    finally:
+        # Note: shutdown(wait=True) blocks for the remainder of the leaked
+        # offload thread (~1s). Acceptable — the prompt-cancel assertion
+        # already passed using arun-only elapsed time above.
+        runner.shutdown()
+
+
+async def test_ctx_offload_pool_is_bounded() -> None:
+    """A bounded offload pool must cap concurrent offloaded calls to max_workers."""
+    counter_lock = threading.Lock()
+    in_flight = 0
+    max_observed = 0
+
+    def blocking_fn() -> None:
+        nonlocal in_flight, max_observed
+        with counter_lock:
+            in_flight += 1
+            if in_flight > max_observed:
+                max_observed = in_flight
+        time.sleep(0.2)
+        with counter_lock:
+            in_flight -= 1
+
+    @task
+    async def offloader() -> int:
+        ctx = current_task()
+        assert ctx is not None
+        await ctx.offload(blocking_fn)
+        return 1
+
+    pools = {
+        "default": Pool(name="default", kind="asyncio", max_workers=8),
+        "offload": Pool(name="offload", kind="offload", max_workers=2),
+    }
+    runner = TaskRunner(pools=pools)
+    handles = [runner.submit(offloader) for _ in range(5)]
+    await runner.arun()
+    runner.shutdown()
+
+    for h in handles:
+        assert h.status == TaskStatus.COMPLETED
+    assert max_observed <= 2, f"observed {max_observed} concurrent offloads (cap=2)"
+    assert max_observed >= 2, (
+        f"expected at least 2 concurrent offloads, observed {max_observed}"
+    )
